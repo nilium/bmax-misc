@@ -1,0 +1,188 @@
+This document is a list of old changes prior to the inclusion in git. It will
+probably never be updated, and consequently is only here for the sake of
+documentation.
+
+July 4, 2008 - 11:30 PM
+- The method call closure no longer provides basic default arguments.  I
+decided that, ultimately, this does not benefit any sort of system in the
+long run and is better off removed.
+
+- I have not tested the array code for arguments, fields, etc., much at
+all, so that's still highly experimented.  I do not recommend trying to use
+it, since for all I know every condition other than my own will break it.
+
+- Prepended the object field string with 'LREF_'.
+
+- Added some support for garbage collection of BMax objects in Lua.  This
+is done through the finalizer metamethod of userdata.  Objects that are
+'forcefully' deleted via the Delete method now rely upon this.  The handle
+for an object, as this is how Lua accesses objects in case you didn't find
+that out just by looking, is not released until the userdata is collected
+by Lua's GC.  More on this below.
+
+- There is a new metatable for garbage collection, as mentioned above.
+
+- Metatables are created on-demand and stored in the Lua registry.  The
+metatables are no longer created over and over for each and every object
+pushed onto the stack.
+
+- Due to Lua's design, meta tables cannot be assigned to light userdata.
+Because of this, all use of light user data for object handles (not
+methods and type ids) has been moved to full userdata.  In order to prevent
+the chance that an object will be garbage-collected by Lua while still in
+use (because each push creates a new userdata), generation of object
+handles is now simply an ever-increasing (and eventually looping around)
+Long.  Handles are stored in the LREF_objectHandles TMap.
+
+Whenever a BMax object is pushed, a new handle is 'allocated,' if you will.
+This means that at any time, an object may have as many handles as a Long
+can represent (that's quite a lot).  If a handle is taken,
+LREF_CreateHandle will continually increase the handle counter until it
+hits a handle that is not currently in use.  If it loops around and reaches
+the handle it started at, an exception is thrown.  Should you ever get this
+exception, you probably have more things to worry about than running out of
+handles.
+
+- The delete method no longer has the object as an upvalue.  This means you
+/must/ use the table:method() syntax to call it.  As a side-effect, you can
+call the destructor as table.Delete(otherTable).  Calling :Delete does not
+mean the object's handle is freed immediately, as this is left up to Lua's
+garbage collector.  What this means is that an object is not freed until
+you have removed all traces of it, including any method pointers from the
+object's table.  Because of this, however, I'm pondering removing the
+Delete method entirely, since it no longer really serves a purpose.
+
+You do not have to call the Delete method to release an object as well,
+but Delete may decrease the amount of time before the object is garbage
+collected.  The most important reason to use Delete is to wipe out the
+object's table, thereby removing the chance that you might accidentally use
+the object again.
+
+- I have just realized that a good chunk of this source code is whitespace
+and documentation.
+
+July 4, 2008 - 12:48 PM
+- Introduced the LREF_USE_EXCEPTIONS constant, which, as the name suggests,
+allows one to toggle whether or not LREF uses exceptions.  This does not
+mean that errors go unhandled.  See the next note for why.  Turning this
+off will only disable exceptions in functions where lua_error can be used.
+
+- lua_error calls added after all exceptions for when LREF_USE_EXCEPTIONS
+is set to 0.  Either way, the code is producing an error, letting it go
+without notice is not permissible, so you have the choice of handling an
+exception or letting Lua handle the error (which you can, in turn, handle
+through Lua if you've read the docs).
+
+- All error messages are now string constants at the head of functions for
+the sake of organization.
+
+June 26, 2008 - 6:49 PM
+- Added lua_pushbmaxarray, lua_tobmaxarray, lua_pushbmaxtmap, and
+lua_pushbmaxtlist as utility functions, since it's something you would
+likely want to do at some point.
+
+June 26, 2008 - 6:16 PM
+- Changed back from pushing method names to pushing the method object.
+Was mainly for debugging, and I think I've got most of the issues there
+ironed out now.
+
+June 26, 2008 - 6:00 PM
+- Removed debugging code since I no longer intend to use it.
+
+- Added ILREFException class for exception throwing.  Currently only used
+for constructor call errors.
+
+- Removed LREF_DumpStackMsg, replaced by LREF_DumpStack.  No longer takes a
+message argument, instead opting to choose whether or not the information
+is printed on the spot or not.  The stack string is always returned.
+
+- Fixed a bug in LREF_TypeCall where if you used Type:Method calling, the
+closure would attempt to get one more argument than it should have.  This
+was because I'd forgotten to apply the use of argOffset properly to the
+loop where arguments are retrieved from the stack.
+
+- Renamed ImplementType/s to lua_implementtype/s to match Lua's naming
+scheme as well as the lua_pushbmaxobject/tobmaxobject functions.
+
+June 23, 2008 - 12:12 AM
+- Switched set/gettable back to rawset/get where the object field is being
+modified after deciding I did not want metatables affecting that field.
+Other fields remain metatable'd.
+
+- Changed object handle type in Lua from number to lightuserdata, since
+it's just better suited for this task.
+
+- Increased the amount of debugging code for LREF_DEBUG_HEAVY dramatically.
+Setting debug info to this mode is no longer recommended unless you intend
+to fix bugs in the code or want to see in detail what occurs.
+
+- Other bug-fixes, focusing mainly on pushing/popping objects where some
+data was not being popped from the stack, resulting in incorrect data
+being passed between functions.
+
+June 22, 2008 - 8:16 PM
+- Fixed a brainfart where hidefields did the opposite of what it was 
+supposed to do.
+
+June 22, 2008 - 7:46 PM
+- Support for get/setting type fields has been added.  The {hidden}
+attribute applies to these as well, since there are obviously fields that
+you do not want to be modifiable in Lua.
+
+Because you may not want any fields exposed, I've included {hidefields} as
+an attribute that will cause all fields to be hidden (it's not that they're
+really hidden, it's just that the object does not get a metatable).
+
+June 22, 2008 - 6:16 PM
+- Changed all use of lua_rawset/rawget to lua_settable/gettable.  The
+original intention for using rawset/get over set/gettable was that I wished
+to avoid the effects of metatables on BMax objects.  However, I feel this
+is not in the interest of preserving the features and flow that Lua is
+known for.
+
+- Fixed a bug in lua_tobmaxobject, where relative indices were not used
+properly.  This has since been fixed, and should no longer be an issue.
+
+June 20, 2008 - 11:56 PM
+- Renamed BMX_OBJECT_FIELD to LREF_OBJECT_FIELD to be consistent with other
+variable names.
+
+June 20, 2008 - 10:10 PM
+- Replaced use of lua_tointeger with lua_tonumber.  Lua uses ptrdiff_t when
+you push an integer, but it does not store the number as an actual integer.
+I would rather cast it to an integer myself than have it cast the double to
+ptrdiff_t and then to int.  Changing LUA_INTEGER to int fixes conversion
+problems, but requiring a modification to the library seems unreasonable to
+me.
+
+- New metadata attributes that apply to types are {static} and {noclass}.
+Static means an instance of the object is created upon being added to Lua,
+however the type itself acts similar to a static class in C#.  The type
+does not have a delete method, and is accessed via <TypeName> as a global
+variable.
+
+This allows something similar to Lua's standard libraries to be implemented
+in the program without writing glue functions.
+
+A noclass type causes the methods to be global without requiring you to
+access them via <TypeName>.<MethodName>. This is more convenient for widely
+used functions where you don't want to specify its class each and every
+time.
+
+- Methods no longer use {expose}- instead, they are exposed unless they
+have the {hidden} attribute.  Methods may be aliased via the {rename}
+attribute, such as [Method Foo() {rename="Bar"}].  I'd have used {alias},
+but that's reserved in BlitzMax for something.  Nobody seems to know what
+for though.
+
+- Metadata booleans are now stored in type constructors for when their
+specs are overridden by the expose, static, and noclass arguments for
+ImplementType.
+
+- Some debug information is available by setting the LREF_DEBUG_MODE global
+to one of the LREF_DEBUG_ constants.
+
+- Other bug fixes, of course, but I can't remember what.
+
+June 19, 2008
+- Initial version
