@@ -25,6 +25,43 @@ SuperStrict
 Import brl.Reflection
 Import axe.Lua
 
+Rem:doc
+	The following attributes can be applied to BMax Types:
+
+ {expose} - When applied to a type, this will result in the type being exposed
+to Lua when ImplementTypes or ImplementType is called on it and any BMax objects
+pushed onto the stack will have their methods and field metatable attached to
+the object unless specified otherwise. Regular object instances can have their
+methods accessed via varname.methodName() or varname:methodName(). For
+instances, it is better to use the second unless you are calling the method as
+if it were a delegate.
+
+	{static} - When applied to a type, the type acts as a static class or namespace
+in Lua. An instance of the type is created and the type is created as a global
+table in Lua. These are accessed either via TypeName.methodName() or
+TypeName:methodName() - either works, but I recommend using the first. The
+fields of the instance this static object is based off of are accessible.
+
+	{noclass} - Requires {static}. When applied to a type, the behavior is the same
+as {static}, except that the functions are pushed as global variables/functions
+in Lua rather than as fields of a table. Only methodName() is required to call
+them. Fields are inaccessible using this attribute, even if static is not set.
+
+	{rename="newName"} - A form of aliasing. Renames a method, such that if a
+method is named lua_Print and it has the attribute {rename="Print"}, the
+function in Lua will be Print, not lua_Print. This can only be applied to
+methods, currently. I may change this later. This attribute does not apply to
+fields.
+
+	{hidden} - When applied to a method or field, will not expose the method/field
+to Lua. This is useful if you would like to only expose methods of a type to
+Lua.
+
+	{hidefields} - When applied to a type, not a field, this will hide all fields
+without exception. As a result, no metatable is set on instances of objects
+created with the type this is applied to.
+EndRem
+
 Private
 
 Const LREF_OBJECT_FIELD:String = "LREF_bmxObject" ' The field of BMax object tables in Lua: table = { <LREF_OBJECT_FIELD> = HANDLE }
@@ -256,6 +293,9 @@ Function LREF_TypeFieldSet:Int(state:Byte Ptr)
 	Local obj:Object
 	Local rfield:TField
 	Local name:String
+	Local typeid:TTypeId
+	Local superid:TTypeId = Null
+	Local hidden:Int = 0
 
 	If lua_type( state, 2 ) <> LUA_TSTRING Then
 		lua_rawset( state, 1 )
@@ -266,10 +306,23 @@ Function LREF_TypeFieldSet:Int(state:Byte Ptr)
 	obj = LREF_GetValue( state, 1 )
 
 	If obj Then
-		rfield = TTypeId.ForObject(obj).FindField(name)
+		typeid = TTypeId.ForObject(obj)
+		rfield = typeid.FindField(name)
 	EndIf
-
-	If rfield <> Null And (Not rfield.MetaData("hidden")) Then
+	
+	hidden = rfield.MetaData("hidden").ToInt()
+	
+	' Ensure that the field is not hidden in a supertype
+	superid = typeid.SuperType()
+	While superid <> Null
+		If ( superid.MetaData("exposed").ToInt()=0 Or superid.MetaData("hidefields").ToInt() ) And superid.FindField(name) <> Null Then
+			hidden = True
+			Exit
+		EndIf
+		superid = superid.SuperType()
+	Wend
+	
+	If rfield <> Null And (Not hidden) Then
 		rfield.Set( obj, LREF_GetValue( state, 3 ) )					' Is a type field
 	Else
 		lua_rawset( state, 1 )										  ' Not a type field
@@ -283,6 +336,8 @@ End Function
 Function LREF_TypeFieldGet:Int(state:Byte Ptr)
 	Local obj:Object
 	Local typeid:TTypeId = Null
+	Local superid:TTypeId = Null
+	Local hidden:Int = 0
 	Local rfield:TField = Null
 	Local name:String
 
@@ -301,8 +356,19 @@ Function LREF_TypeFieldGet:Int(state:Byte Ptr)
 			rfield = typeid.FindField(lua_tostring( state, -1 ))
 		EndIf
 	EndIf
+	
+	hidden = rfield.MetaData("hidden").ToInt()
+	
+	superid = typeid.SuperType()
+	While superid <> Null
+		If ( superid.MetaData("exposed").ToInt()=0 Or superid.MetaData("hidefields").ToInt() ) And superid.FindField(name) <> Null Then
+			hidden = True
+			Exit
+		EndIf
+		superid = superid.SuperType()
+	Wend
 
-	If rfield <> Null And (Not rfield.MetaData("hidden")) Then
+	If rfield <> Null And (Not hidden) Then
 		Select rfield.TypeId()
 			Case FloatTypeId
 				lua_pushnumber( state, rfield.GetFloat(obj) )
@@ -334,6 +400,8 @@ End Function
 
 
 ' TypeDelete()
+' `Deletes` an object, essentially makes it unusable in Lua.  I'd like to replace
+' this with some sort of basic retain-release thing instead.
 Function LREF_TypeDelete:Int(state:Byte Ptr)
 	Const ERROR_NOT_AN_OBJECT$ = "Error calling type destructor: destructor called from non-object"
 	Const ERROR_NO_OBJECT$ = "Error calling type destructor: invalid arguments to destructor"
@@ -384,7 +452,8 @@ Function LREF_TypeDelete:Int(state:Byte Ptr)
 End Function
 
 
-' This is only called if the type's field
+' This is only called if the object's table is collected by the Lua GC, in which
+' case we will remove its handle from the internal reference map
 Function LREF_TypeCollection:Int(state:Byte Ptr)
 	Local udata:Long = LREF_ToObjectHandle( state, 1 )
 	LREF_ReleaseHandle(udata)
@@ -392,7 +461,8 @@ Function LREF_TypeCollection:Int(state:Byte Ptr)
 	Return 0
 End Function
 
-
+' Called when any method is called.  Provides a generic interface to all methods
+' through the reflection module.
 Function LREF_TypeCall:Int(state:Byte Ptr)
 	Const ERROR_NULL_METHOD$ = "Unable to call method: Null TMethod object attached to closure"
 	Const ERROR_NUM_ARGUMENTS$ = "Error calling $1::$2(): Expected $3 arguments, only received $4"
@@ -475,7 +545,9 @@ Function LREF_TypeCall:Int(state:Byte Ptr)
 	EndIf
 End Function
 
-
+' Pushes a BMax object onto the stack, using either the class's lua constructor,
+' any of its superclasses' constructors, or finally pushing a raw object without
+' methods or fields
 Function LREF_ConstructBMaxObject( state:Byte Ptr, obj:Object, typeId:TTypeId )
 	If typeId = Null Then
 		typeId = TTypeId.ForObject(obj)
@@ -518,7 +590,8 @@ Function LREF_ConstructBMaxObject( state:Byte Ptr, obj:Object, typeId:TTypeId )
 	EndIf
 End Function
 
-
+' Auxiliary function to clear a table of its contents.  Not sure if there's a
+' Lua-provided way to do this yet.
 Function LREF_ClearTable( state:Byte Ptr, idx:Int )
 	Local top:Int = lua_gettop(state)
 
@@ -537,7 +610,7 @@ Function LREF_ClearTable( state:Byte Ptr, idx:Int )
 	EndIf
 End Function
 
-
+' Gets the equivalent BMax value off the lua stack
 Function LREF_GetValue:Object( state:Byte Ptr, idx:Int )
 	Local obj:Object
 
@@ -601,26 +674,26 @@ Function LREF_PushBMaxObject( state:Byte Ptr, obj:Object, from:TTypeId, expose:I
 		from = TTypeId.ForObject(obj)
 	EndIf
 	
-	If expose = -1 And from.MetaData("expose") Then
-		expose = True
+	If expose = -1 Then
+		expose = from.MetaData("expose").ToInt()
 	ElseIf expose = -1 Then
 		expose = False
 	EndIf
 	
-	If static = -1 And from.MetaData("static") Then
-		static = True
+	If static = -1 Then
+		static = from.MetaData("static").ToInt()
 	ElseIf static = -1 Then
 		static = False
 	EndIf
 	
-	If noclass = -1 And from.MetaData("noclass") Then
-		noclass = True
+	If noclass = -1 Then
+		noclass = from.MetaData("noclass").ToInt()
 	ElseIf noclass = -1 Then
 		noclass = False
 	EndIf
 	
-	If hidefields = -1 And from.MetaData("hidefields") Then
-		hidefields = True
+	If hidefields = -1 Then
+		hidefields = from.MetaData("hidefields").ToInt()
 	ElseIf hidefields = -1 Then
 		hidefields = False
 	EndIf
@@ -658,12 +731,12 @@ Function LREF_PushBMaxObject( state:Byte Ptr, obj:Object, from:TTypeId, expose:I
 		For methIter = EachIn from.EnumMethods()
 			name = methIter.Name()
 
-			If from.MetaData("hidden") Or name.ToLower() = "delete" Or name.ToLower() = "new" Then
+			If from.MetaData("hidden").ToInt() Or name.ToLower() = "delete" Or name.ToLower() = "new" Then
 				Continue
 			EndIf
 
 			rename = methIter.MetaData("rename")
-			If rename Then
+			If rename <> "" Then
 				name = rename
 			EndIf
 			rename = Null
@@ -700,7 +773,11 @@ Function LREF_PushBMaxObject( state:Byte Ptr, obj:Object, from:TTypeId, expose:I
 	EndIf
 End Function
 
-
+' Creates meta-tables for garbage collection and class field access and places
+' them in the registry.
+' This should only be called once for each Lua state, never by the user.  It
+' should not affect anything if it's called as many times as you want, but
+' there's no reason to do so.
 Function LREF_CreateMetaTables(state:Byte Ptr)
 	' Fields
 	lua_pushstring( state, LREF_METATABLE_FIELDS )
@@ -728,7 +805,8 @@ Function LREF_CreateMetaTables(state:Byte Ptr)
 End Function
 
 
-' Debugging code
+' Debugging code, probably going to remove this at a later date.  Ironically,
+' the debugging code does not get debugged.
 Function LREF_DumpStack$( lua:Byte Ptr, output%=True ) NoDebug
 	Local sout:String = ""
 	Local lout:String
@@ -767,6 +845,8 @@ Function LREF_DumpStack$( lua:Byte Ptr, output%=True ) NoDebug
 End Function
 
 
+' Debugging code
+' Converts a table to a string for visualization purposes.
 Function LREF_TableToString$( lua:Byte Ptr, idx:Int, indent%=0 ) NoDebug
 	Local out$ = "{ "
 	Local idn$ = " "[..indent]
@@ -819,27 +899,45 @@ End Function
 
 Public
 
+Rem:doc
+	Low-level function to expose/implement a type in Lua.
+	
+	@param state The Lua state you'll be exposing the Type to.
+	@param from The TTypeID for the Type you're exposing to Lua.
+	@param expose Whether or not to expose the type. Left at -1, this value will be
+retrieved from the Type's "expose" attribute.
+	@param static Whether or not the type is exposed as a static class. Left at -1,
+this value will be retrieved from the Type's "static" attribute.
+	@param noclass Whether or not the type is exposed as a set of functions or
+static class. This parameter only takes effect if the type is also static. Left
+at -1, this value will be retrieved from the Type's "noclass" attribute.
+	@param hidefields Whether or not the type is exposed with accessible fields. If
+this is set to true (or the Type has its "hidefields" attribute set to a
+non-zero value), the Type's fields will be inaccessible in Lua. Left at -1, this
+value will be retrieved from the Type's "hidefields" attribute.
+
+EndRem
 Function lua_implementtype( state:Byte Ptr, from:TTypeID, expose:Int=-1, static:Int=-1, noclass:Int=-1, hidefields%=-1 )
-	If expose = -1 And from.MetaData("expose") Then
-		expose = True
+	If expose = -1 Then
+		expose = from.MetaData("expose").ToInt()
 	ElseIf expose = -1 Then
 		expose = False
 	EndIf
 
-	If static = -1 And from.MetaData("static") Then
-		static = True
+	If static = -1 Then
+		static = from.MetaData("static").ToInt()
 	ElseIf static = -1 Then
 		static = False
 	EndIf
 
-	If noclass = -1 And from.MetaData("noclass") Then
-		noclass = True
+	If noclass = -1 Then
+		noclass = from.MetaData("noclass").ToInt()
 	ElseIf noclass = -1 Then
 		noclass = False
 	EndIf
 
-	If hidefields = -1 And from.MetaData("hidefields") Then
-		hidefields = True
+	If hidefields = -1 Then
+		hidefields = from.MetaData("hidefields").ToInt()
 	ElseIf hidefields = -1 Then
 		hidefields = False
 	EndIf
@@ -870,7 +968,12 @@ Function lua_implementtype( state:Byte Ptr, from:TTypeID, expose:Int=-1, static:
 	EndIf
 End Function
 
+Rem:doc
+	Auxiliary function to iterate over all types and implement them based on their
+attributes.
 
+	@param state The Lua state to expose the Types to.
+EndRem
 Function lua_implementtypes(state:Byte Ptr)
 	Local typeIter:TTypeId
 
@@ -882,7 +985,15 @@ End Function
 
 ' Convenience functions
 
-' Passing true to excludeMethods may be faster, at the expense of, well, not having methods
+Rem:doc
+	Pushes a BMax object onto the Lua stack.
+
+	@param state The Lua state
+	@param obj The object to push onto the stack
+	@param excludeMethods Whether or not to include access to methods when
+pushing the object onto the stack.  Some speed may be gained in setting this to
+True.  Defaults to False.
+EndRem
 Function lua_pushbmaxobject( state:Byte Ptr, obj:Object, excludeMethods:Int=False )
 	If excludeMethods Then
 		LREF_PushBMaxObject( state, obj, Null, False, False, False, True )
@@ -892,6 +1003,9 @@ Function lua_pushbmaxobject( state:Byte Ptr, obj:Object, excludeMethods:Int=Fals
 End Function
 
 
+Rem:doc
+	Retrieves an object from the Lua stack.
+EndRem
 Function lua_tobmaxobject:Object( state:Byte Ptr, idx:Int )
 	Local obj:Object = Null
 	
@@ -919,6 +1033,9 @@ End Function
 
 
 ' Can be an array of objects, so excludeMethods is still an argument here
+Rem:doc
+	Pushes a BMax array of objects as a table.
+EndRem
 Function lua_pushbmaxarray( state:Byte Ptr, obj:Object, excludeMethods:Int = False )
 	Local typeid:TTypeId = TTypeId.ForObject(obj)
 	Local idx:Int
@@ -969,7 +1086,9 @@ Function lua_pushbmaxarray( state:Byte Ptr, obj:Object, excludeMethods:Int = Fal
 	End Select
 End Function
 
-
+Rem:doc
+	Converts a Lua table to a BMax array.
+EndRem
 Function lua_tobmaxarray:Object[]( state:Byte Ptr, idx:Int )
 	Local tableLen:Int
 	Local tableInner:Int
@@ -1001,6 +1120,9 @@ End Function
 
 
 ' Your key must either BE a string or override ToString to have any meaningful key
+Rem:doc
+	Pushes a TMap object onto the stack as a table.
+EndRem
 Function lua_pushbmaxtmap( state:Byte Ptr, map:TMap, excludeMethods:Int = False )
 	Local keyval:TNode
 
@@ -1023,7 +1145,9 @@ Function lua_pushbmaxtmap( state:Byte Ptr, map:TMap, excludeMethods:Int = False 
 	Next
 End Function
 
-
+Rem:doc
+	Pushes a TList object onto the stack as a table.
+EndRem
 Function lua_pushbmaxtlist( state:Byte Ptr, list:TList, excludeMethods:Int = False )
 	Local item:Object
 	Local idx:Int = 1
