@@ -920,26 +920,18 @@ EndRem
 Function lua_implementtype( state:Byte Ptr, from:TTypeID, expose:Int=-1, static:Int=-1, noclass:Int=-1, hidefields%=-1 )
 	If expose = -1 Then
 		expose = from.MetaData("expose").ToInt()
-	ElseIf expose = -1 Then
-		expose = False
 	EndIf
 
 	If static = -1 Then
 		static = from.MetaData("static").ToInt()
-	ElseIf static = -1 Then
-		static = False
 	EndIf
 
 	If noclass = -1 Then
 		noclass = from.MetaData("noclass").ToInt()
-	ElseIf noclass = -1 Then
-		noclass = False
 	EndIf
 
 	If hidefields = -1 Then
 		hidefields = from.MetaData("hidefields").ToInt()
-	ElseIf hidefields = -1 Then
-		hidefields = False
 	EndIf
 
 	If expose Then
