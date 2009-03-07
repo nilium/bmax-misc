@@ -4,6 +4,8 @@ Import "class-manip.c"
 
 Extern "C"
 	Function objFreePtr:Int()
+	
+	Function bbObjectRegisterType( clas@ Ptr )
 End Extern
 
 'buildopt:debug
@@ -175,7 +177,7 @@ Type IClass
 	End Method
 	
 	Method Size%()
-		Return InstanceSize()+8
+		Return InstanceSize()+4
 	End Method
 	
 	Method InstanceSize%()
@@ -288,6 +290,11 @@ Type IClass
 		
 		DebugDecl = DebugDeclBank.Lock()
 	End Method
+	
+	' ONLY CALL THIS ONCE PER CLASS
+	Method RegisterClass()
+		bbObjectRegisterType(Class)
+	End Method
 End Type
 
 '#region Testing
@@ -316,6 +323,10 @@ Type DebugScope
 	End Method
 	
 	Function ForClass:DebugScope(cp@ Ptr)
+		If cp = Null Then
+			Return Null
+		EndIf
+		
 		Local scope:DebugScope = New DebugScope
 		scope._class = Int cp
 		Local p% Ptr = Int Ptr cp
@@ -341,6 +352,9 @@ Type DebugScope
 	
 	Function ForName:DebugScope(_type$)
 		Local typeid:TTypeId = TTypeId.ForName(_type)
+		If typeid = Null Then
+			Return Null
+		EndIf
 		Return DebugScope.ForClass(Byte Ptr typeid._class)
 	End Function
 	

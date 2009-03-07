@@ -14,6 +14,33 @@ Type Foobar
 	End Method
 End Type
 
+Function ReplaceMethod( _method:String, inClass:String, with@ Ptr, searchSuperTypes:Int = False )
+	Local result:Int = False
+	Local scope:DebugScope = DebugScope.ForName(inClass)
+	Local class:Int Ptr = Int Ptr scope._class
+	While scope And class
+		Local decl:DebugDecl = scope.DeclForName(_method, DECL_TYPEMETHOD)
+		
+		If decl = Null And searchSuperTypes Then
+			class = Int Ptr class[0]
+			scope = DebugScope.ForClass(class)
+			Continue
+		ElseIf decl = Null
+			scope = Null
+			class = Null
+			Exit
+		EndIf
+		
+		Byte Ptr Ptr(Byte Ptr(class)+decl.opaque)[0] = with
+		result = True
+		
+		scope = Null
+		class = Null
+	Wend
+	
+	Return result
+End Function
+
 Local foo:Foobar = New Foobar
 
 Local scope:DebugScope = DebugScope.ForName("Foobar")
@@ -25,8 +52,7 @@ Print foo.ToString()
 foo.setName("razzledazzlerootbeer")
 
 ' Methods are located at class+offset, so modify the method there
-Local methPtr:Byte Ptr Ptr = (Byte Ptr Ptr(Int(scope._class)+decl.opaque))
-methPtr[0] = newToString
+ReplaceMethod( "ToString", "Foobar", newToString, False )
 
 Print foo.ToString()
 
