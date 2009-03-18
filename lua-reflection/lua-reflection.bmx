@@ -28,39 +28,39 @@ Import axe.Lua
 Rem:doc
 	The following attributes can be applied to BMax Types:
 
- {expose} - When applied to a type, this will result in the type being exposed
-to Lua when ImplementTypes or ImplementType is called on it and any BMax objects
-pushed onto the stack will have their methods and field metatable attached to
-the object unless specified otherwise. Regular object instances can have their
-methods accessed via varname.methodName() or varname:methodName(). For
-instances, it is better to use the second unless you are calling the method as
-if it were a delegate.
+	 {expose} - When applied to a type, this will result in the type being exposed
+	to Lua when ImplementTypes or ImplementType is called on it and any BMax objects
+	pushed onto the stack will have their methods and field metatable attached to
+	the object unless specified otherwise. Regular object instances can have their
+	methods accessed via varname.methodName() or varname:methodName(). For
+	instances, it is better to use the second unless you are calling the method as
+	if it were a delegate.
 
-	{static} - When applied to a type, the type acts as a static class or namespace
-in Lua. An instance of the type is created and the type is created as a global
-table in Lua. These are accessed either via TypeName.methodName() or
-TypeName:methodName() - either works, but I recommend using the first. The
-fields of the instance this static object is based off of are accessible.
+		{static} - When applied to a type, the type acts as a static class or namespace
+	in Lua. An instance of the type is created and the type is created as a global
+	table in Lua. These are accessed either via TypeName.methodName() or
+	TypeName:methodName() - either works, but I recommend using the first. The
+	fields of the instance this static object is based off of are accessible.
 
-	{noclass} - Requires {static}. When applied to a type, the behavior is the same
-as {static}, except that the functions are pushed as global variables/functions
-in Lua rather than as fields of a table. Only methodName() is required to call
-them. Fields are inaccessible using this attribute, even if static is not set.
+		{noclass} - Requires {static}. When applied to a type, the behavior is the same
+	as {static}, except that the functions are pushed as global variables/functions
+	in Lua rather than as fields of a table. Only methodName() is required to call
+	them. Fields are inaccessible using this attribute, even if static is not set.
 
-	{rename="newName"} - A form of aliasing. Renames a method, such that if a
-method is named lua_Print and it has the attribute {rename="Print"}, the
-function in Lua will be Print, not lua_Print. This can only be applied to
-methods, currently. I may change this later. This attribute does not apply to
-fields.
+		{rename="newName"} - A form of aliasing. Renames a method, such that if a
+	method is named lua_Print and it has the attribute {rename="Print"}, the
+	function in Lua will be Print, not lua_Print. This can only be applied to
+	methods, currently. I may change this later. This attribute does not apply to
+	fields.
 
-	{hidden} - When applied to a method or field, will not expose the method/field
-to Lua. This is useful if you would like to only expose methods of a type to
-Lua.
+		{hidden} - When applied to a method or field, will not expose the method/field
+	to Lua. This is useful if you would like to only expose methods of a type to
+	Lua.
 
-	{hidefields} - When applied to a type, not a field, this will hide all fields
-without exception. As a result, no metatable is set on instances of objects
-created with the type this is applied to.
-EndRem
+		{hidefields} - When applied to a type, not a field, this will hide all fields
+	without exception. As a result, no metatable is set on instances of objects
+	created with the type this is applied to.
+End Rem
 
 Private
 
