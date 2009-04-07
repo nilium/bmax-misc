@@ -6,7 +6,7 @@ Import Brl.Blitz
 Import Brl.Reflection
 Import Brl.Max2D
 Import Brl.GLMax2D
-Import axe.Lua
+Import pub.Lua
 
 Import "lua-reflection.bmx"
 
