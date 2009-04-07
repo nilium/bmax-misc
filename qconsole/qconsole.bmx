@@ -22,29 +22,20 @@ EndRem
 
 SuperStrict
 
-Import "../collections/collections.bmx"
+Import brl.LinkedList
 
 Private
-
-Type IConsoleLink Extends ILink
-	Field value$
-
-	Method ToString$()
-		Return value
-	End Method
-End Type
-
 
 Public
 
 Type IConsole
 	Field m_fade# = 0.0
-	Field m_consoleLog:IList
+	Field m_consoleLog:TList
 	Field m_consoleLength:Int
-	Field m_commandRecord:IList
+	Field m_commandRecord:TList
 	Field m_commandCount:Int
 	Field m_state:Int = ST_CLOSED
-	Field m_input:IConsoleLink
+	Field m_input:TLink
 	Field m_inputPos%=0
 	Field m_tempInput%=0
 	Field m_cvars:TMap
@@ -58,13 +49,12 @@ Type IConsole
 	Const CONSOLE_SPEED# = .01
 
 	Method New()
-		m_commandRecord = New IList
+		m_commandRecord = New TList
 		m_commandCount = 0
 
-		m_input = New IConsoleLink
-		m_commandRecord.AddLinkFirst(m_input)
+		m_input = m_commandRecord.AddFirst("")
 
-		m_consoleLog = New IList
+		m_consoleLog = New TList
 		m_consoleLength = 0
 
 		m_cvars = New TMap
@@ -105,7 +95,8 @@ Type IConsole
 			Next
 		Else
 			If m_consoleLength = 200 Then
-				m_consoleLog.Pop()
+				m_consoleLog.Last()
+				m_consoleLog.RemoveLast()
 			EndIf
 
 			m_consoleLog.AddFirst( msg )
@@ -149,12 +140,14 @@ Type IConsole
 
 		SetColor( 255, 255, 255 )
 		
-		Local theight% = TextHeight(m_input.value)
-		Local tpos% = height-TextHeight(m_input.value)-4
+		Local txt$ = String(m_input._value)
+		
+		Local theight% = TextHeight(txt)
+		Local tpos% = height-TextHeight(txt)-4
 
-		DrawText( m_input.value, theight/4+8, tpos )
+		DrawText( txt, theight/4+8, tpos )
 
-		Local curPos% = theight/4+8+TextWidth( m_input.value[..m_inputPos] )
+		Local curPos% = theight/4+8+TextWidth( txt[..m_inputPos] )
 		DrawRect( 2, tpos, theight/4, theight )
 
 		SetAlpha( Abs(Sin(Millisecs()*ticks)*m_fade) )
@@ -164,7 +157,7 @@ Type IConsole
 		SetAlpha( m_fade )
 
 		Local logPos% = tpos-2
-		Local msg:ILink = m_consoleLog.GetFirstLink()
+		Local msg:TLink = m_consoleLog.FirstLink()
 
 		While logPos > 0 And msg
 			Local text$ = String msg.Value()
@@ -202,16 +195,19 @@ Type IConsole
 		If evt = Null Then
 			Throw "Cannot process null event"
 		Else
+			Local txt$ = String(m_input._value)
 			Select evt.Id
 				Case EVENT_KEYCHAR
 					Local char$ = String.FromShorts( Short Ptr Varptr evt.Data, 1 )
 
 					If evt.Data = 8 Then		' KEY_BACKSPACE
-						If m_inputPos = m_input.value.Length And m_input.value.Length > 0 Then
-							m_input.value = m_input.value[..m_input.value.Length-1]
+						If m_inputPos = txt.Length And txt.Length > 0 Then
+							txt = txt[..txt.Length-1]
+							m_input._value = txt
 							m_inputPos :- 1
 						ElseIf m_inputPos > 0 Then
-							m_input.value = m_input.value[..m_inputPos-1]+m_input.value[m_inputPos..]
+							txt = txt[..m_inputPos-1]+txt[m_inputPos..]
+							m_input._value = txt
 							m_inputPos :- 1
 						EndIf
 
@@ -229,18 +225,21 @@ Type IConsole
 						Return True
 					EndIf
 
-					If m_input.PreviousLink() <> Null Then ' Copy input to new link since we're modifying it
-						Local firstLink:IConsoleLink = IConsoleLink(m_commandRecord.GetFirstLink())
-						firstLink.value = m_input.value
+					If m_input.PrevLink() <> Null Then ' Copy input to new link since we're modifying it
+						Local firstLink:TLink = m_commandRecord.FirstLink()
+						firstLink._value = m_input._value
 						m_input = firstLink
 					EndIf
 
-					If m_inputPos = m_input.value.Length Then
-						m_input.value :+ char
+					If m_inputPos = txt.Length Then
+						txt :+ char
+						m_input._value = txt
 					ElseIf m_inputPos = 0 Then
-						m_input.value = char + m_input.value
+						txt = char + txt
+						m_input._value = txt
 					Else
-						m_input.value = m_input.value[..m_inputPos]+char+m_input.value[m_inputPos..]
+						txt = txt[..m_inputPos]+char+txt[m_inputPos..]
+						m_input._value = txt
 					EndIf
 
 					m_inputPos :+ 1
@@ -257,10 +256,12 @@ Type IConsole
 							' Moved to handle repeating keys
 
 						Case KEY_DELETE
-							If m_inputPos = 0 And m_input.value.Length > 0 Then
-								m_input.value = m_input.value[..m_input.value.Length=1]
-							ElseIf m_inputPos < m_input.value.Length Then
-								m_input.value = m_input.value[..m_inputPos]+m_input.value[m_inputPos+1..]
+							If m_inputPos = 0 And txt.Length > 0 Then
+								txt = txt[..txt.Length=1]
+								m_input._value = txt
+							ElseIf m_inputPos < txt.Length Then
+								txt = txt[..m_inputPos]+txt[m_inputPos+1..]
+								m_input._value = txt
 							EndIf
 
 						Case KEY_LEFT
@@ -269,36 +270,35 @@ Type IConsole
 							EndIf
 
 						Case KEY_RIGHT
-							If m_inputPos < m_input.value.Length Then
+							If m_inputPos < txt.Length Then
 								m_inputPos :+ 1
 							EndIf
 
 						Case KEY_ENTER
-							If m_input.PreviousLink() Then
-								Local firstLink:IConsoleLink = IConsoleLink(m_commandRecord.GetFirstLink())
-								firstLink.value = m_input.value
+							If m_input.PrevLink() Then
+								Local firstLink:TLink = m_commandRecord.FirstLink()
+								firstLink._value = m_input._value
 								m_input = firstLink
 							EndIf
 
-							ProcessCommand( m_input.value )
-							m_input = New IConsoleLink
-							m_commandRecord.AddLinkFirst( m_input )
+							ProcessCommand( txt )
+							m_input = m_commandRecord.AddFirst("")
 							m_inputPos = 0
 
 						Case KEY_UP
 							If m_input.NextLink() <> Null Then
-								m_input = IConsoleLink(m_input.NextLink())
-								m_inputPos = m_input.value.Length
+								m_input = m_input.NextLink()
+								m_inputPos = txt.Length
 							EndIf
 
 						Case KEY_DOWN
-							If m_input.PreviousLink() <> Null Then
-								m_input = IConsoleLink(m_input.PreviousLink())
-								m_inputPos = m_input.value.Length
+							If m_input.PrevLink() <> Null Then
+								m_input = m_input.PrevLink()
+								m_inputPos = txt.Length
 							EndIf
 
 						Case KEY_END
-							m_inputPos = m_input.value.Length
+							m_inputPos = txt.Length
 
 						Case KEY_HOME
 							m_inputPos = 0
