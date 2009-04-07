@@ -23,7 +23,8 @@ EndRem
 SuperStrict
 
 Import brl.Reflection
-Import axe.Lua
+Import pub.Lua
+Import "lua-reflection.c"
 
 Rem:doc
 	The following attributes can be applied to BMax Types:
@@ -64,90 +65,17 @@ End Rem
 
 Private
 
-Const LREF_OBJECT_FIELD:String = "LREF_bmxObject" ' The field of BMax object tables in Lua: table = { <LREF_OBJECT_FIELD> = HANDLE }
+Extern "C"
+	Function lref_pushrawobject(state@ Ptr, obj:Object)
+	Function lref_releaserawobject(state@ Ptr, idx:Int)
+	Function lref_torawobject:Object(state@ Ptr, idx:Int)
+	Function lref_disposeobject%(state@ Ptr)
+End Extern
+
+Const LREF_OBJECT_FIELD:String = "LREF_object_field"
 Const LREF_METATABLE_FIELDS:String = "LREF_metatable_fields"	' Field access metatable
 Const LREF_METATABLE_OBJECTS:String = "LREF_metatable_objects"  ' Userdata collection metatable
 Const LREF_USE_EXCEPTIONS:Int = True
-
-' Object handles are used for full userdata objects (not methods/type ids and such, since those do not need to have their IDs freed)
-Global LREF_objectHandles:TMap = New TMap
-
-Type LREF_ObjRef
-	Field m_obj:Object
-	Field m_handle:Long
-
-	Global s_nextHandle:Long = 0
-
-	Method Set:LREF_ObjRef( obj:Object )
-		m_handle = s_nextHandle
-		s_nextHandle :+ 1
-		m_obj = obj
-		Return Self
-	End Method
-
-	Method Get:LREF_ObjRef( handle:Long )
-		m_handle = handle
-		Return Self
-	End Method
-
-	Method Dispose()
-		m_obj = Null
-		m_handle = 0
-	End Method
-
-	Method Compare:Int( o:Object )
-		Local oh:Long = LREF_ObjRef(o).m_handle
-
-		If oh < m_handle Then
-			Return -1
-		ElseIf oh > m_handle Then
-			Return 1
-		Else
-			Return 0
-		EndIf
-	End Method
-End Type
-
-
-Function LREF_CreateHandle:Long(obj:Object)
-	Local ref:LREF_ObjRef = New LREF_ObjRef.Set(obj)
-	Local initHandle:Long = ref.m_handle
-	
-	While LREF_objectHandles.Contains( ref )
-		ref.Set(obj)
-
-		If initHandle = ref.m_handle Then
-			' For reference, this should never, ever happen - you shouldn't be able to use up all the references, you're
-			' more likely to run out of memory before that I'd guess
-			Throw LREF_Exception( "No object handles available", Null )
-		EndIf
-	Wend
-	
-	LREF_objectHandles.Insert( ref, ref )
-	
-	Return ref.m_handle
-End Function
-
-
-Function LREF_HandleToObject:Object( h:Long )
-	Local ref:LREF_ObjRef = LREF_ObjRef(LREF_objectHandles.ValueForKey(New LREF_ObjRef.Get(h)))
-	
-	If ref Then
-		Return ref.m_obj
-	Else
-		Return Null
-	EndIf
-End Function
-
-
-Function LREF_ReleaseHandle( h:Long )
-	Local ref:LREF_ObjRef = LREF_ObjRef(LREF_objectHandles.ValueForKey(New LREF_ObjRef.Get(h)))
-	
-	If ref Then
-		ref.Dispose()
-	EndIf
-End Function
-
 
 Public
 
@@ -193,17 +121,6 @@ Function LREF_lua_upvalueindex:Int(idx:Int) NoDebug
 End Function
 
 
-Function LREF_ToObjectHandle:Long( state:Byte Ptr, idx:Int )
-	Local p:Long Ptr
-	Local handle:Long
-
-	p = Long Ptr lua_touserdata( state, idx )
-	handle = p[0]
-
-	Return handle
-End Function
-
-
 Function LREF_AttachMetatable( state:Byte Ptr, idx:Int, metatable$ )
 	If idx < 1 And idx > LUA_REGISTRYINDEX Then
 		idx = lua_gettop(state) - (idx+1)
@@ -235,7 +152,7 @@ Function LREF_TypeNew:Int(state:Byte Ptr)
 	Local expose:Int, noclass:Int, static:Int, hidefields:Int
 	Local objIdx:Int = -1
 
-	typeid = TTypeId(HandleToObject(Int lua_touserdata( state, LREF_lua_upvalueindex(1) )))
+	typeid = TTypeId(lref_torawobject(state, LREF_lua_upvalueindex(1)))
 
 	If typeid = Null Then
 		If LREF_USE_EXCEPTIONS Then
@@ -249,7 +166,7 @@ Function LREF_TypeNew:Int(state:Byte Ptr)
 	Else
 		If lua_gettop(state) = 1 And lua_type( state, 1 ) = LUA_TUSERDATA Then
 			objIdx = 1
-			obj = LREF_HandleToObject(LREF_ToObjectHandle( state, objIdx ))
+			obj = lref_torawobject(state, objIdx)
 
 			If obj = Null Then
 				If LREF_USE_EXCEPTIONS Then
@@ -310,17 +227,19 @@ Function LREF_TypeFieldSet:Int(state:Byte Ptr)
 		rfield = typeid.FindField(name)
 	EndIf
 	
-	hidden = rfield.MetaData("hidden").ToInt()
+	If rfield <> Null Then
+		hidden = rfield.MetaData("hidden").ToInt()
 	
-	' Ensure that the field is not hidden in a supertype
-	superid = typeid.SuperType()
-	While superid <> Null
-		If ( superid.MetaData("exposed").ToInt()=0 Or superid.MetaData("hidefields").ToInt() ) And superid.FindField(name) <> Null Then
-			hidden = True
-			Exit
-		EndIf
-		superid = superid.SuperType()
-	Wend
+		' Ensure that the field is not hidden in a supertype
+		superid = typeid.SuperType()
+		While superid <> Null
+			If ( superid.MetaData("exposed").ToInt()=0 Or superid.MetaData("hidefields").ToInt() ) And superid.FindField(name) <> Null Then
+				hidden = True
+				Exit
+			EndIf
+			superid = superid.SuperType()
+		Wend
+	EndIf
 	
 	If rfield <> Null And (Not hidden) Then
 		rfield.Set( obj, LREF_GetValue( state, 3 ) )					' Is a type field
@@ -347,7 +266,10 @@ Function LREF_TypeFieldGet:Int(state:Byte Ptr)
 	EndIf
 
 	name = lua_tostring( state, 2 )
-	obj = LREF_GetValue( state, 1 )
+	lua_pushstring( state, LREF_OBJECT_FIELD )
+	lua_gettable( state, 1 )
+	obj = lref_torawobject( state, -1 )
+	lua_pop(state, 1)
 
 	If obj Then
 		typeid = TTypeId.ForObject(obj)
@@ -357,16 +279,18 @@ Function LREF_TypeFieldGet:Int(state:Byte Ptr)
 		EndIf
 	EndIf
 	
-	hidden = rfield.MetaData("hidden").ToInt()
+	If rfield <> Null Then
+		hidden = rfield.MetaData("hidden").ToInt()
 	
-	superid = typeid.SuperType()
-	While superid <> Null
-		If ( superid.MetaData("exposed").ToInt()=0 Or superid.MetaData("hidefields").ToInt() ) And superid.FindField(name) <> Null Then
-			hidden = True
-			Exit
-		EndIf
-		superid = superid.SuperType()
-	Wend
+		superid = typeid.SuperType()
+		While superid <> Null
+			If ( superid.MetaData("exposed").ToInt()=0 Or superid.MetaData("hidefields").ToInt()>0 ) And superid.FindField(name) <> Null Then
+				hidden = True
+				Exit
+			EndIf
+			superid = superid.SuperType()
+		Wend
+	EndIf
 
 	If rfield <> Null And (Not hidden) Then
 		Select rfield.TypeId()
@@ -398,69 +322,6 @@ Function LREF_TypeFieldGet:Int(state:Byte Ptr)
 	Return 1
 End Function
 
-
-' TypeDelete()
-' `Deletes` an object, essentially makes it unusable in Lua.  I'd like to replace
-' this with some sort of basic retain-release thing instead.
-Function LREF_TypeDelete:Int(state:Byte Ptr)
-	Const ERROR_NOT_AN_OBJECT$ = "Error calling type destructor: destructor called from non-object"
-	Const ERROR_NO_OBJECT$ = "Error calling type destructor: invalid arguments to destructor"
-
-	Local objIdx:Int
-	Local typeid:TTypeId
-
-	If lua_gettop(state) <> 1 Then
-		If LREF_USE_EXCEPTIONS Then
-			Throw LREF_Exception( ERROR_NO_OBJECT, state )
-		EndIf
-
-		lua_pushstring( state, ERROR_NO_OBJECT )
-		lua_error(state)
-
-		Return 0
-	EndIf
-
-	If lua_type( state, 1 ) <> LUA_TTABLE Then
-		If LREF_USE_EXCEPTIONS Then
-			Throw LREF_Exception( ERROR_NOT_AN_OBJECT, state )
-		EndIf
-
-		lua_pushstring( state, ERROR_NOT_AN_OBJECT )
-		lua_error(state)
-
-		Return 0
-	EndIf
-
-	lua_pushstring( state, LREF_OBJECT_FIELD )
-	lua_rawget( state, 1 )
-
-	If lua_type( state, 2 ) <> LUA_TUSERDATA Then
-		If LREF_USE_EXCEPTIONS Then
-			Throw LREF_Exception( ERROR_NOT_AN_OBJECT, state )
-		EndIf
-
-		lua_pushstring( state, ERROR_NOT_AN_OBJECT )
-		lua_error(state)
-
-		Return 0
-	EndIf
-
-	lua_pop( state, 1 )
-	LREF_ClearTable( state, 1 )
-
-	Return 0
-End Function
-
-
-' This is only called if the object's table is collected by the Lua GC, in which
-' case we will remove its handle from the internal reference map
-Function LREF_TypeCollection:Int(state:Byte Ptr)
-	Local udata:Long = LREF_ToObjectHandle( state, 1 )
-	LREF_ReleaseHandle(udata)
-
-	Return 0
-End Function
-
 ' Called when any method is called.  Provides a generic interface to all methods
 ' through the reflection module.
 Function LREF_TypeCall:Int(state:Byte Ptr)
@@ -473,10 +334,10 @@ Function LREF_TypeCall:Int(state:Byte Ptr)
 	Local result:Object
 	Local argOffset:Int
 
-	obj = LREF_HandleToObject(LREF_ToObjectHandle( state, LREF_lua_upvalueindex(2) ))
+	obj = lref_torawobject( state, LREF_lua_upvalueindex(2) )
 
 	typeid = TTypeId.ForObject(obj)
-	meth = TMethod(HandleToObject(Int lua_touserdata( state, LREF_lua_upvalueindex(1) )))
+	meth = TMethod(lref_torawobject( state, LREF_lua_upvalueindex(1) ))
 
 	If meth = Null Then
 		If LREF_USE_EXCEPTIONS Then
@@ -511,7 +372,7 @@ Function LREF_TypeCall:Int(state:Byte Ptr)
 		' numArgs = lua_gettop(state)-(argOffset-1) ' No more default arguments
 	EndIf
 
-	For argIdx = 0 To numArgs-1
+	For argIdx = 0 Until numArgs
 		args[argIdx] = LREF_GetValue( state, argOffset+argIdx )
 	Next
 
@@ -560,8 +421,7 @@ Function LREF_ConstructBMaxObject( state:Byte Ptr, obj:Object, typeId:TTypeId )
 		' In the event that a constructor for the object's type already exists, use that
 		Print "Using existing constructor"
 
-		Local p:Long Ptr = Long Ptr lua_newuserdata( state, 8 )
-		p[0] = LREF_CreateHandle(obj)
+		lref_pushrawobject( state, obj )
 
 		LREF_AttachMetaTable( state, -1, LREF_METATABLE_OBJECTS )
 
@@ -639,7 +499,7 @@ Function LREF_GetValue:Object( state:Byte Ptr, idx:Int )
 				Return arr
 			ElseIf lua_type(state, -1) = LUA_TUSERDATA Then
 				' Otherwise, it's an object
-				obj = LREF_HandleToObject(LREF_ToObjectHandle( state, -1 ))
+				obj = lref_torawobject(state, -1)
 				lua_pop( state, 1 )
 				
 				Return obj
@@ -676,31 +536,22 @@ Function LREF_PushBMaxObject( state:Byte Ptr, obj:Object, from:TTypeId, expose:I
 	
 	If expose = -1 Then
 		expose = from.MetaData("expose").ToInt()
-	ElseIf expose = -1 Then
-		expose = False
 	EndIf
 	
 	If static = -1 Then
 		static = from.MetaData("static").ToInt()
-	ElseIf static = -1 Then
-		static = False
 	EndIf
 	
 	If noclass = -1 Then
 		noclass = from.MetaData("noclass").ToInt()
-	ElseIf noclass = -1 Then
-		noclass = False
 	EndIf
 	
 	If hidefields = -1 Then
 		hidefields = from.MetaData("hidefields").ToInt()
-	ElseIf hidefields = -1 Then
-		hidefields = False
 	EndIf
 	
 	If objIdx = -1 Then
-		Local p:Long Ptr = Long Ptr lua_newuserdata( state, 8 )
-		p[0] = LREF_CreateHandle(obj)
+		lref_pushrawobject(state, obj)
 		objIdx = lua_gettop(state)
 		ownObjIdx = True
 		
@@ -745,7 +596,7 @@ Function LREF_PushBMaxObject( state:Byte Ptr, obj:Object, from:TTypeId, expose:I
 			lua_pushstring( state, name )
 
 			'lua_pushstring( state, methIter.Name() )
-			lua_pushlightuserdata( state, Byte Ptr HandleFromObject(methIter) )
+			lref_pushrawobject( state, methIter )
 			lua_pushvalue( state, objIdx )
 
 			lua_pushcclosure( state, LREF_TypeCall, 2 )
@@ -756,16 +607,9 @@ Function LREF_PushBMaxObject( state:Byte Ptr, obj:Object, from:TTypeId, expose:I
 			' upvalue is that you sort of have delegates in Lua...
 		Next
 	EndIf
-
-	If Not static Then
-		' {Type}::Delete method
-		lua_pushstring( state, "Delete" )
-		lua_pushcclosure( state, LREF_TypeDelete, 0 )
-		lua_settable( state, tableIdx )
-	EndIf
-
+	
 	If expose = True And hidefields = False And noclass = False Then  ' If the type is not exposed or if it's regular functions, fields will be inaccessible
-		LREF_AttachMetaTable( state, -2, LREF_METATABLE_FIELDS )
+		LREF_AttachMetaTable( state, -1, LREF_METATABLE_FIELDS )
 	EndIf
 
 	If ownObjIdx Then
@@ -798,7 +642,7 @@ Function LREF_CreateMetaTables(state:Byte Ptr)
 	lua_createtable( state, 0, 1 )
 
 	lua_pushstring( state, "__gc" )
-	lua_pushcclosure( state, LREF_TypeCollection, 0 )
+	lua_pushcclosure( state, lref_disposeobject, 0 )
 	lua_rawset( state, -3 )
 
 	lua_settable( state, LUA_REGISTRYINDEX )
@@ -917,7 +761,7 @@ non-zero value), the Type's fields will be inaccessible in Lua. Left at -1, this
 value will be retrieved from the Type's "hidefields" attribute.
 
 EndRem
-Function lua_implementtype( state:Byte Ptr, from:TTypeID, expose:Int=-1, static:Int=-1, noclass:Int=-1, hidefields%=-1 )
+Function lua_implementtype( state:Byte Ptr, from:TTypeId, expose:Int=-1, static:Int=-1, noclass:Int=-1, hidefields%=-1 )
 	If expose = -1 Then
 		expose = from.MetaData("expose").ToInt()
 	EndIf
@@ -947,7 +791,7 @@ Function lua_implementtype( state:Byte Ptr, from:TTypeID, expose:Int=-1, static:
 			' function NewName()
 			lua_pushstring( state, "New"+from.Name() )
 			' upvalues - a lot of them
-			lua_pushlightuserdata( state, Byte Ptr HandleFromObject(from) )	  ' uv 1
+			lref_pushrawobject( state, from )	  ' uv 1
 			lua_pushboolean( state, expose )
 			lua_pushboolean( state, static )
 			lua_pushboolean( state, noclass )
@@ -999,28 +843,11 @@ Rem:doc
 	Retrieves an object from the Lua stack.
 EndRem
 Function lua_tobmaxobject:Object( state:Byte Ptr, idx:Int )
-	Local obj:Object = Null
-	
-	If idx < 1 And idx > LUA_REGISTRYINDEX Then
-		idx = lua_gettop(state) - (idx+1)
-	EndIf
-	
-	If lua_type( state, idx ) <> LUA_TTABLE Then
-		Return Null
-	Else
-		lua_pushstring( state, LREF_OBJECT_FIELD )
-		lua_rawget( state, idx )
-		
-		If lua_type( state, -1 ) = LUA_TUSERDATA Then
-			obj = LREF_HandleToObject(LREF_ToObjectHandle( state, -1 ))
-			lua_pop( state, 1 )
-			
-			Return obj
-		Else
-			lua_pop( state, 1 )
-			Return Null
-		EndIf
-	EndIf
+	lua_pushstring(state, LREF_OBJECT_FIELD)
+	lua_gettable(state, idx)
+	Local obj:Object = lref_torawobject(state, -1)
+	lua_pop(state, 1)
+	Return obj
 End Function
 
 
