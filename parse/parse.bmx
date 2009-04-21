@@ -28,41 +28,6 @@ Private
 Global buf@[8192] ' Buffer of data to be parsed
 Global shrts:Short[128] ' Buffer for what used to be nam$ in IPNode.ReadNodes
 
-Global gIPNodeDataType:IPNodeType = New IPNodeType
-Global gIPDocDataType:IPDocType = New IPDocType
-
-Type IPDocType Extends TDataType
-    Method Tag$( )
-        Return "Parse.IPDoc"
-    End Method
-    
-    Method WriteObject( obj:Object, stream:TStream )
-        IPDoc(obj).Write(stream)
-    End Method
-
-    Method ReadObject:Object( stream:TStream )
-        Return IPDoc.Load(stream)
-    End Method
-End Type
-
-Type IPNodeType Extends TDataType
-    Method Tag$( )
-        Return "Parse.IPNode"
-    End Method
-
-    Method WriteObject( obj:Object, stream:TStream )
-        Local node:IPNode = IPNode( obj )
-        If Not node Then Return
-        node.Write( stream )
-    End Method
-
-    Method ReadObject:Object( stream:TStream )
-        Local node:IPNode = New IPNode
-        node.Read( stream, -1 )
-        Return node
-    End Method
-End Type
-
 Public
 
 Rem
@@ -76,7 +41,7 @@ End Function
 Rem
 bbdoc: Managed interface for a collection of IPNodes.
 EndRem
-Type IPDoc Extends TData
+Type IPDoc
     Rem
     bbdoc: The root of the IPDoc
     EndRem
@@ -123,16 +88,12 @@ Type IPDoc Extends TData
     Method Write( stream:TStream )
         root.Write( stream )
     End Method
-    
-    Method DataType:TDataType()
-        Return gIPNodeDataType
-    End Method
 End Type
 
 Rem
 bbdoc: A node in an Parse document tree.  A node has functions for reading
 EndRem
-Type IPNode Extends TData
+Type IPNode
     Field link:ILink
     Rem
     bbdoc: The name of the node.
@@ -544,10 +505,6 @@ Type IPNode Extends TData
         Wend
 
         Return Null
-    End Method
-    
-    Method DataType:TDataType( )
-        Return gIPNodeDataType
     End Method
 End Type
 
