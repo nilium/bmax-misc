@@ -24,16 +24,6 @@ SuperStrict
 
 Public
 
-Rem:doc [Exception template]
-	Exception template:
-	{code:
-		Global e<Name>Exception:Object = [ ..
-			"<Name>Exception", ..
-			"<Reason>" ..
-		]
-	}
-EndRem
-
 Rem:doc
 	Exception thrown when it is not possible to set the value for a key.
 EndRem
@@ -98,19 +88,3 @@ Type TKeyValueException
 		Return _reason
 	End Method
 End Type
-
-Rem:doc [Exception userinfo example]
-	When passing user info to an object, you can pass any data type you
-	prefer.  This code specifically uses arrays of key-value pairs.
-	
-	Key-value pairs are 2-element arrays where the first element is the key
-	and the second element is the value.
-	
-	For example:
-	{code:
-		Local info:Object = [..
-			[kKVEKey, Object "keyname"], ..
-			[kKVEValue, Object "value"], ..
-		]
-	}
-EndRem
