@@ -39,9 +39,9 @@ Rem
 	updated.
 EndRem
 Extern "C"	
-	Function setterForObserver:Byte Ptr(observer:TObserver)
+	Function setterForObserverMethod:Byte Ptr(observer:TObserverMethod)
 	?Threaded
-	Function getterForObserver:Byte Ptr(observer:TObserver)
+	Function getterForObserverMethod:Byte Ptr(observer:TObserverMethod)
 	?
 End Extern
 
@@ -75,7 +75,7 @@ Type TObserverLock
 	End Method
 End Type
 
-Type TObserver {ManualObserving}
+Type TObserverMethod {ManualObserving}
 	Field _key:String {Restricted}
 	Field _method:Byte Ptr {Restricted}
  	Field _field:TField {Restricted}
@@ -114,7 +114,7 @@ EndRem
 Function AddObservingForType( id:TTypeId )
 	Local setter$, key$
 	Local mp:Byte Ptr Ptr, mc:Byte Ptr
-	Local observer:TObserver, closure:Byte Ptr
+	Local observer:TObserverMethod, closure:Byte Ptr
 	' getter name, setter name, key name, 
 	Local fields:TList = id.Fields()
 	Local methods:TList = id.Methods()
@@ -154,12 +154,12 @@ Function AddObservingForType( id:TTypeId )
 				mp = Byte Ptr Ptr(Byte Ptr(id._class)+tm._index)
 				mc = mp[0]
 				
-				observer = New TObserver
+				observer = New TObserverMethod
 				observer._field = tf
 				observer._key = key
 				observer._method = mc
 				
-				closure = setterForObserver(observer)
+				closure = setterForObserverMethod(observer)
 				Assert closure, "Could not create closure for observing key"
 				
 				mp[0] = closure

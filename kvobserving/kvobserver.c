@@ -114,7 +114,7 @@ static void autoObserverSetter(ffi_cif* cif, void* result, void** args, void* us
 }
 
 // Generates a setter closure for the observer.
-ffi_closure* setterForObserver(bbTObserver* observer)
+ffi_closure* setterForObserverMethod(bbTObserver* observer)
 {
     ffi_status status;
     ffi_cif *cif;
@@ -187,7 +187,7 @@ ffi_closure* setterForObserver(bbTObserver* observer)
 #ifdef THREADS
 
 // Generates a getter closure for the observer.
-ffi_closure* getterForObserver(
+ffi_closure* getterForObserverMethod(
     BBObject* observer, ffi_type *type,
     void(*fun)(ffi_cif*, void*, void**, void*))
 {
