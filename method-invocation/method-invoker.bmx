@@ -57,6 +57,32 @@ Function fin_objrelease(p:Byte Ptr) NoDebug
 End Function
 EndRem
 
+Function fin_ffi_type_for_typeid:Byte Ptr(id:TTypeId, size:Int Ptr=Null)
+	Select id
+		Case ByteTypeID
+			If size Then size[0] = 1
+			Return ptr_ffi_type_uint8
+		Case ShortTypeID
+			If size Then size[0] = 2
+			Return ptr_ffi_type_uint16
+		Case IntTypeID
+			If size Then size[0] = 1
+			Return ptr_ffi_type_sint32
+		Case LongTypeID
+			If size Then size[0] = 2
+			Return ptr_ffi_type_sint64
+		Case FloatTypeID
+			If size Then size[0] = 1
+			Return ptr_ffi_type_float
+		Case DoubleTypeID
+			If size Then size[0] = 2
+			Return ptr_ffi_type_double
+		Default
+			If size Then size[0] = 1
+			Return ptr_ffi_type_pointer
+	End Select
+End Function
+
 
 Extern "C" ' the following globals are pointers to their actual values because I am lazy
 	Global ptr_ffi_type_void:Byte Ptr       = "ptr_ffi_type_void"
@@ -133,7 +159,7 @@ Type CMethodInvocation
 	
 	Method _retPtr:Byte Ptr()
 		If _returnType = ptr_ffi_type_pointer Then
-			Return ((Byte Ptr Varptr _fn)+32)
+			Return ((Byte Ptr Varptr _returnType)+8)
 		Else
 			Return Varptr _returnValue[0]
 		EndIf
@@ -167,6 +193,7 @@ Type CMethodInvocation
 	Method InitWithNamedMethod:CMethodInvocation(name$, argTypes:TTypeID[], returnType:TTypeID)
 		_name = name
 		Local offset:Int = 1
+		Local argDim:Int = 0
 		
 		_argTypes = New Byte Ptr[argTypes.Length+1]
 		_argOffsets = New Int[_argTypes.Length]
@@ -176,29 +203,8 @@ Type CMethodInvocation
 		
 		For Local idx:Int = 0 Until argTypes.Length
 			_argOffsets[idx+1] = offset
-			Select argTypes[idx]
-				Case ByteTypeID
-					offset :+ 1
-					_argTypes[idx+1] = ptr_ffi_type_uint8
-				Case ShortTypeID
-					offset :+ 1
-					_argTypes[idx+1] = ptr_ffi_type_uint16
-				Case IntTypeID
-					offset :+ 1
-					_argTypes[idx+1] = ptr_ffi_type_sint32
-				Case LongTypeID
-					offset :+ 2
-					_argTypes[idx+1] = ptr_ffi_type_sint64
-				Case FloatTypeID
-					offset :+ 1
-					_argTypes[idx+1] = ptr_ffi_type_float
-				Case DoubleTypeID
-					offset :+ 2
-					_argTypes[idx+1] = ptr_ffi_type_double
-				Default
-					offset :+ 1
-					_argTypes[idx+1] = ptr_ffi_type_pointer
-			End Select
+			_argTypes[idx+1] = fin_ffi_type_for_typeid(argTypes[idx], Varptr argDim)
+			offset :+ argDim
 		Next
 		
 		_args = New Int[offset]
@@ -206,28 +212,10 @@ Type CMethodInvocation
 			_argPtrs[idx] = Varptr _args[_argOffsets[idx]]
 		Next
 		
-		Select returnType
-			Case ByteTypeID
-				_returnType = ptr_ffi_type_uint8
-				_returnValue = New Int[1]
-			Case ShortTypeID
-				_returnType = ptr_ffi_type_uint16
-				_returnValue = New Int[1]
-			Case IntTypeID
-				_returnType = ptr_ffi_type_sint32
-				_returnValue = New Int[1]
-			Case LongTypeID
-				_returnType = ptr_ffi_type_sint64
-				_returnValue = New Int[2]
-			Case FloatTypeID
-				_returnType = ptr_ffi_type_float
-				_returnValue = New Int[1]
-			Case DoubleTypeID
-				_returnType = ptr_ffi_type_double
-				_returnValue = New Int[2]
-			Default
-				_returnType = ptr_ffi_type_pointer
-		End Select
+		_returnType = fin_ffi_type_for_typeid(returnType, Varptr argDim)
+		If _returnType <> ptr_ffi_type_pointer Then
+			_returnValue = New Int[argDim]
+		EndIf
 		
 		Local stat:Int = ffi_prep_cif(_cif, ffi_abi.FFI_DEFAULT_ABI, _argTypes.Length, _returnType, _argTypes)
 		If stat = ffi_status.FFI_BAD_TYPEDEF Then
@@ -250,9 +238,17 @@ Type CMethodInvocation
 			If _fn = Null Then
 				Local typeid:TTypeID = TTypeId.ForObject(_target)
 				Local meth:TMethod = typeid.FindMethod(_name)
-				If meth = Null Or meth.ArgTypes().Length <> (_argTypes.Length-1) Then
-					Throw "Invalid operation"
-				EndIf
+				Assert meth, "Method for name ~q"+_name+"~q not found"
+				
+				' verify that the method matches the invocation specs
+				Local argTypes:TTypeId[] = meth.ArgTypes()
+				Assert argTypes.Length = (_argTypes.Length-1), "Method parameters do not match invocation parameters"
+				For Local idx:Int = 0 Until argTypes.Length
+					Assert fin_ffi_type_for_typeid(argTypes[idx]) = _argTypes[idx+1], "Method parameters do not match invocation parameters"
+				Next
+				
+				Assert _returnType = fin_ffi_type_for_typeid(meth.TypeId()), "Method return type does not match invocation return type"
+				
 				_fn = (Byte Ptr Ptr(Byte Ptr(typeid._class)+meth._index))[0]
 			EndIf
 			Return _fn
@@ -427,9 +423,8 @@ Type CMethodInvocation
 	
 	Method Invoke()
 		Local fp:Byte Ptr = MethodPointer()
-		If fp = Null Or _target = Null Then
-			Throw "Invalid Operation"
-		EndIf
+		Assert _target, "Target is Null"
+		Assert fp, "Method pointer not found"
 		Local stat:Int = ffi_call(_cif, _fn, _retPtr(), _argPtrs)
 	End Method
 End Type
