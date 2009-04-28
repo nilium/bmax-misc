@@ -24,6 +24,7 @@ SuperStrict
 
 Import "exception.bmx"
 Import "notification.bmx"
+Import "utility.bmx"
 
 Import Brl.Reflection
 Import Brl.LinkedList
@@ -171,6 +172,9 @@ Function AddObservingForType( id:TTypeId )
 	Next
 End Function
 
+Const WillChangeValueForKeyNotification$="WillChangeValueForKeyNotification"
+Const DidChangeValueForKeyNotification$="DidChangeValueForKeyNotification"
+
 Rem:doc
 	Sends a notification that the value of the {param:key} in the
 	{param:specified object|obj} will change.
@@ -194,13 +198,14 @@ Function WillChangeValueForKey(obj:Object, key:String)
 		EndIf
 	Next
 	kvo_changeList.AddFirst([obj, Object key, Object New TObserverLock.Lock()])
-	
-	' Send notification
-	Print "Will change value for key '"+key+"'"
-	
 	?Threaded
 	kvo_changeMutex.Unlock()
 	?
+	
+	' Send notification
+	TNotificationCenter.DefaultCenter().PostNotificationWithName( ..
+										 WillChangeValueForKeyNotification, ..
+										 obj, MapWithKeysAndValues(["Key"], [key]))
 End Function
 
 Rem:doc
@@ -220,15 +225,19 @@ Function DidChangeValueForKey(obj:Object, key:String)
 			Local lock:TObserverLock = TObserverLock(change[2])
 			If Not lock.Unlock() Then
 				link.Remove()
-				
-				' Send notification
-				Print "Did change value for key '"+key+"'"
-				
+				?Threaded
+				kvo_changeMutex.Unlock()
+				?
+				TNotificationCenter.DefaultCenter().PostNotificationWithName( ..
+													 DidChangeValueForKeyNotification, ..
+													 obj, MapWithKeysAndValues(["Key"], [key]))
+				Return
+			Else
+				?Threaded
+				kvo_changeMutex.Unlock()
+				?
+				Return
 			EndIf
-			?Threaded
-			kvo_changeMutex.Unlock()
-			?
-			Return
 		EndIf
 		
 		link = link.NextLink()
