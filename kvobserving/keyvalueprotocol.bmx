@@ -26,36 +26,9 @@ Import Brl.Reflection
 
 Import "exception.bmx"
 
-Public
+Private
 
-Rem:doc
-	Base class for types that want to provide their own implementation of
-	{method:SetValueForKey} and {method:ValueForKey}.
-EndRem
-Type TKeyValueProtocol
-	Rem:doc
-		Sets the {param:value} of the {param:key} in the object.
-	EndRem
-	Method SetValueForKey(key:String, value:Object)
-		Try
-			SetValueForKeyInObject(Self, key, value)
-		Catch ex:TKeyValueException
-			Throw ex
-		End Try
-	End Method
-	
-	Rem:doc
-		Gets the value for {param:key} of the object.
-	EndRem
-	Method ValueForKey:Object(key:String)
-		Return ValueForKeyInObject(Self, key)
-	End Method
-End Type
-
-Rem:doc
-	Gets the value for {param:key} in the {param:specified object|obj}. 
-EndRem
-Function ValueForKeyInObject:Object(obj:Object, key:String)
+Function kvp_valueForKeyInObject:Object(obj:Object, key:String)
 	If key.StartsWith("_") Then
 		Throw TKeyValueException.Exception(eValueAccessRestrictedException)
 	EndIf
@@ -65,14 +38,38 @@ Function ValueForKeyInObject:Object(obj:Object, key:String)
 	Local keyname$
 	If dot = -1 Then
 		Local tid:TTypeId = TTypeId.ForObject(obj)
+		Local elemIndex:Int = key.Find("[")
+		If elemIndex <> -1 Then
+			Local idx:Int = key[elemIndex+1..key.Find("]")].ToInt()
+			key = key[..elemIndex]
+			elemIndex = idx
+		EndIf
+		
+		Local getter:String = key
+		If elemIndex > -1 Then
+			getter :+ "forindex"
+		EndIf
+		Local tm:TMethod = tid.FindMethod(getter)
+		If tm Then
+			If tm.Metadata("Deprecated").ToInt() Then
+				DebugLog "Accessing deprecated key @"+key
+			EndIf
+		
+			If tm.Metadata("Restricted").ToInt() Then
+				Throw TKeyValueException.Exception(eValueAccessRestrictedException)
+			EndIf
+			
+			If elemIndex > -1 Then
+				Return tm.Invoke(obj, [String(elemIndex)])
+			EndIf
+			
+			Return tm.Invoke(obj, Null)
+		EndIf
 		
 		For Local keyfield:TField = EachIn tid.EnumFields()
 			keyname = keyfield.Metadata("Key").ToLower()
 			If keyname = Null Then
 				keyname = keyfield.Name().ToLower()
-				If keyname.StartsWith("_") Then
-					keyname = keyname[1..]
-				EndIf
 			EndIf
 			
 			If keyname <> key Then
@@ -83,18 +80,38 @@ Function ValueForKeyInObject:Object(obj:Object, key:String)
 				DebugLog "Accessing deprecated key @"+key
 			EndIf
 			
-			If keyfield.Metadata("Restricted").ToInt() Then
+			If keyfield.Metadata("Restricted").ToInt() Or keyfield.Metadata("WriteOnly") Then
 				Throw TKeyValueException.Exception(eValueAccessRestrictedException)
 			EndIf
 			
-			Local getter:String = keyfield.Metadata("Getter")
-			If getter = Null Then
-				getter = "Get"+key
+			If elemIndex > -1 Then
+				getter = keyfield.Metadata("Getter")
+			Else
+				getter = keyfield.Metadata("GetterForIndex")
 			EndIf
 			
-			Local tm:TMethod = tid.FindMethod(getter)
-			If tm Then
-				Return tm.Invoke(obj, New Object[0])
+			If getter Then
+				tm = tid.FindMethod(getter)
+				
+				If tm Then
+					If tm.Metadata("Deprecated") Then
+						DebugLog "Accessing deprecated key @"+key
+					EndIf
+
+					If tm.Metadata("Restricted").ToInt() Then
+						Throw TKeyValueException.Exception(eValueAccessRestrictedException)
+					EndIf
+				
+					If elemIndex > -1 Then
+						Return tm.Invoke(obj, [String(elemIndex)])
+					EndIf
+					
+					Return tm.Invoke(obj, Null)
+				EndIf
+			EndIf
+			
+			If elemIndex > -1 Then
+				Return keyfield.TypeId().GetArrayElement(keyfield.Get(obj), elemIndex)
 			Else
 				Return keyfield.Get(obj)
 			EndIf
@@ -114,11 +131,7 @@ Function ValueForKeyInObject:Object(obj:Object, key:String)
 	EndIf
 End Function
 
-Rem:doc
-	Sets the {param:value} of the {param:key} in the
-	{param:specified object|obj}.
-EndRem
-Function SetValueForKeyInObject(obj:Object, key:String, value:Object)
+Function kvp_setValueForKeyInObject(obj:Object, key:String, value:Object)
 	If key.StartsWith("_") Then
 		Throw TKeyValueException.Exception(eValueAccessRestrictedException)
 	EndIf
@@ -128,32 +141,83 @@ Function SetValueForKeyInObject(obj:Object, key:String, value:Object)
 	Local keyname$
 	If dot = -1 Then
 		Local tid:TTypeId = TTypeId.ForObject(obj)
+		Local elemIndex:Int = key.Find("[")
+		If elemIndex <> -1 Then
+			Local idx:Int = key[elemIndex+1..key.Find("]")].ToInt()
+			key = key[..elemIndex]
+			elemIndex = idx
+		EndIf
+		
+		Local setter:String = "set"+key
+		If elemIndex > -1 Then
+			setter :+ "forindex"
+		EndIf
+		Local tm:TMethod = tid.FindMethod(setter)
+		If tm Then
+			If tm.Metadata("Deprecated").ToInt() Then
+				DebugLog "Setting deprecated key @"+key
+			EndIf
+		
+			If tm.Metadata("Restricted").ToInt() Then
+				Throw TKeyValueException.Exception(eValueAccessRestrictedException)
+			EndIf
+			
+			If elemIndex > -1 Then
+				tm.Invoke(obj, [value, Object(String(elemIndex))])
+			Else
+				tm.Invoke(obj, [value])
+			EndIf
+			Return
+		EndIf
 		
 		For Local keyfield:TField = EachIn tid.EnumFields()			
 			keyname = keyfield.Metadata("Key").ToLower()
 			If keyname = Null Then
 				keyname = keyfield.Name().ToLower()
-				If keyname.StartsWith("_") Then
-					keyname = keyname[1..]
-				EndIf
 			EndIf
 		
 			If keyname <> key Then
 				Continue
 			EndIf
 			
-			If keyfield.Metadata("Restricted").ToInt() Then
+			If keyfield.Metadata("Deprecated").ToInt() Then
+				DebugLog "Setting deprecated key @"+key
+			EndIf
+			
+			If keyfield.Metadata("Restricted").ToInt() Or keyfield.Metadata("ReadOnly").ToInt() Then
 				Throw TKeyValueException.Exception(eValueAccessRestrictedException)
 			EndIf
 		
-			Local setter:String = keyfield.Metadata("Setter")
-			If setter = Null Then
-				setter = "Set"+Key
+			Local setter:String
+			If elemIndex > -1 Then
+				setter = keyfield.Metadata("SetterForIndex")
+			Else
+				setter = keyfield.Metadata("Setter")
 			EndIf
 		
-			Local tm:TMethod = tid.FindMethod(setter)
-			If tm Then
-				tm.Invoke(obj, [value])
+			If setter Then
+				Local tm:TMethod = tid.FindMethod(setter)
+				If tm Then
+					If tm.Metadata("Deprecated").ToInt() Then
+						DebugLog "Setting deprecated key @"+key
+					EndIf
+
+					If tm.Metadata("Restricted").ToInt() Then
+						Throw TKeyValueException.Exception(eValueAccessRestrictedException)
+					EndIf
+					
+					If elemIndex > -1 Then
+						tm.Invoke(obj, [value, Object(String(elemIndex))])
+						Return
+					EndIf
+					
+					tm.Invoke(obj, [value])
+					Return
+				EndIf
+			EndIf
+			
+			If elemIndex > -1 Then
+				keyfield.TypeId().SetArrayElement(keyfield.Get(obj), elemIndex, value)
 				Return
 			Else
 				keyfield.Set(obj, value)
@@ -176,4 +240,52 @@ Function SetValueForKeyInObject(obj:Object, key:String, value:Object)
 			Throw TKeyValueException.Exception(eCannotSetKeyValueException)
 		End Try
 	EndIf
+End Function
+
+Public
+
+Rem:doc
+	Base class for types that want to provide their own implementation of
+	{method:SetValueForKey} and {method:ValueForKey}.
+EndRem
+Type TKeyValueProtocol	
+	Rem:doc
+		Sets the {param:value} of the {param:key} in the object.
+	EndRem
+	Method SetValueForKey(key:String, value:Object)
+		kvp_setValueForKeyInObject(Self, key, value)
+	End Method
+	
+	Rem:doc
+		Gets the value for {param:key} of the object.
+	EndRem
+	Method ValueForKey:Object(key:String)
+		Return kvp_valueForKeyInObject(Self, key) 
+	End Method
+End Type
+
+Rem:doc
+	Gets the value for {param:key} in the {param:specified object|obj}. 
+EndRem
+Function ValueForKeyInObject:Object(obj:Object, key:String)
+	Local kvo:TKeyValueProtocol = TKeyValueProtocol(obj)
+	If kvo Then
+		Return kvo.ValueForKey(key)
+	EndIf
+	
+	Return kvp_valueForKeyInObject(obj, key)
+End Function
+
+Rem:doc
+	Sets the {param:value} of the {param:key} in the
+	{param:specified object|obj}.
+EndRem
+Function SetValueForKeyInObject(obj:Object, key:String, value:Object)
+	Local kvo:TKeyValueProtocol = TKeyValueProtocol(obj)
+	If kvo Then
+		kvo.SetValueForKey(key, value)
+		Return
+	EndIf
+	
+	kvp_setValueForKeyInObject(obj, key, value)
 End Function
