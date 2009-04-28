@@ -22,6 +22,8 @@ EndRem
 
 SuperStrict
 
+'buildopt:threads
+
 Import Brl.Blitz
 Import Brl.Reflection
 Import Brl.Threads
@@ -58,16 +60,34 @@ Type Observer
 	Method willChange(notification:TNotification)
 		Print "Value is going to change"
 	End Method
+	
+	Method anyNotification(notification:TNotification)
+		Print "From anyNotification"
+	End Method
+	
+	Method anyNotification2(notification:TNotification)
+		Print "From anyNotification2"
+	End Method
 End Type
-
-TNotificationCenter.DefaultCenter().AddObserver(New Observer, "willChange", WillChangeValueForKeyNotification)
-TNotificationCenter.DefaultCenter().AddObserver(New Observer, "itsValueDidChange", DidChangeValueForKeyNotification)
 
 AddObservingForType(TTypeId.ForName("Observed"))
 
 ' test
 
 Local f:Observed = New Observed
+
+Local nc:TNotificationCenter = TNotificationCenter.DefaultCenter()
+Local obs:Observer = New Observer
+' obs is watching for the WillChangeValueForKeyNotification from any object
+nc.AddObserver(obs, "willChange", WillChangeValueForKeyNotification)
+' obs is watching for a specific notification from any object
+nc.AddObserver(obs, "anyNotification")
+' obs is watching for any notification from the 'f' object
+nc.AddObserver(obs, "anyNotification2", Null, f)
+' obs watching for a specific notification from any object
+nc.AddObserver(obs, "itsValueDidChange", DidChangeValueForKeyNotification)
+' obs watching for a specific notification from the 'obs' object (will never be called unless obs posts a notification)
+nc.AddObserver(obs, "itsValueDidChange", DidChangeValueForKeyNotification, obs)
 
 Print f.Name()
 f.SetName("Bernard")
