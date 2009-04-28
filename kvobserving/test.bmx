@@ -26,12 +26,12 @@ Import Brl.Blitz
 Import Brl.Reflection
 Import Brl.Threads
 
-'Import "exception.bmx"
 Import "keyvalueobserving.bmx"
 Import "keyvalueprotocol.bmx"
 
 Type Observed Extends TKeyValueProtocol
-	Field _name:String = "Default Value" {Key="Name" Setter="SetName" Getter="Name"}
+	Field _name:String = "Default Value"
+	Field _values:String[] = ["foo 1", "bar 2", "baz 3", "big 4"] {Key="Rabble" SetterForIndex="SetSomethingForIndex" GetterForIndex="SomethingForIndex"}
 	
 	Method Name:String()
 		Return _name
@@ -40,7 +40,28 @@ Type Observed Extends TKeyValueProtocol
 	Method SetName(name:String)
 		_name = name
 	End Method
+	
+	Method SomethingForIndex:Object(idx:Int)
+		Return _values[idx]
+	End Method
+	
+	Method SetSomethingForIndex(val:String, idx:Int)
+		_values[idx] = val
+	End Method
 End Type
+
+Type Observer
+	Method itsValueDidChange(notification:TNotification)
+		Print "Value has changed to "+ValueForKeyInObject(notification.AssociatedObject(), String(TMap(notification.UserInfo()).ValueForKey("Key"))).ToString()
+	End Method
+	
+	Method willChange(notification:TNotification)
+		Print "Value is going to change"
+	End Method
+End Type
+
+TNotificationCenter.DefaultCenter().AddObserver(New Observer, "willChange", WillChangeValueForKeyNotification)
+TNotificationCenter.DefaultCenter().AddObserver(New Observer, "itsValueDidChange", DidChangeValueForKeyNotification)
 
 AddObservingForType(TTypeId.ForName("Observed"))
 
@@ -54,3 +75,10 @@ Print f.Name()
 
 f.SetValueForKey("Name", "Dr. Davis")
 Print String(f.ValueForKey("Name"))
+
+Print String(f.ValueForKey("Rabble[0]"))
+Print String(f.ValueForKey("Rabble[1]"))
+Print String(f.ValueForKey("Rabble[2]"))
+Print String(f.ValueForKey("Rabble[3]"))
+f.SetValueForKey("Rabble[3]", "Foobar")
+Print String(f.ValueForKey("Rabble[3]"))
