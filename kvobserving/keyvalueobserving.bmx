@@ -78,8 +78,9 @@ End Type
 
 Type TObserverMethod {ManualObserving}
 	Field _key:String {Restricted}
+	Field _indexed:Int {Restricted}
 	Field _method:Byte Ptr {Restricted}
- 	Field _field:TField {Restricted}
+ 	Field _type:TTypeId {Restricted}
 	
 	?Threaded
 	Field _lock:TMutex {Restricted} ' definitely restricted
@@ -120,54 +121,68 @@ Function AddObservingForType( id:TTypeId )
 	Local fields:TList = id.Fields()
 	Local methods:TList = id.Methods()
 	Local argTypes:TTypeId[]
-	For Local tf:TField = EachIn fields
-		If tf.Metadata("ManualObserving").ToInt() Then
-			Continue
-		EndIf
+	
+	Local keysString:String = id.Metadata("Keys")
+	If Not keysString Then
+		Return
+	EndIf
+	
+	Local keys:String[][]
+	If keysString.Find(",") <> -1 Then
+		Local spkeys:String[] = keysString.Split(",")
+		keys = New String[][spkeys.Length]
+		Local key:String
+		For Local idx:Int = 0 Until spkeys.Length
+			key = spkeys[idx].Trim().ToLower()
+			keys[idx] = [key, "set"+key, "set"+key+"forindex"]
+		Next
+	Else
+		keysString = keysString.Trim().ToLower()
+		keys = [[keysString, "set"+keysString, "set"+keysString+"forindex"]]
+	EndIf
+	
+	Local methName:String
+	For Local tm:TMethod = EachIn methods
+		methName = tm.Name().ToLower()
 		
-		If tf.Metadata("Restricted").ToInt() Then
-			Continue
-		EndIf
+		Print methName
 		
-		key = tf.Metadata("Key").ToLower()
-		If key = Null Then
-			key = tf.Name()
-			If key.StartsWith("_") Then
-				key = key[1..]
+		For Local key:String[] = EachIn keys
+			If key[1] <> methName And key[2] <> methName Then
+				Continue
 			EndIf
-		EndIf
+			
+			Print key[0]+" "+key[1]+" "+key[2]
+			
+			mp = Byte Ptr Ptr(Byte Ptr(id._class)+tm._index)
+			mc = mp[0]
+			
+			observer = New TObserverMethod
+			observer._key = key[0]
+			observer._method = mc
 		
-		setter = tf.Metadata("Setter").ToLower()
-		If setter = Null Then
-			setter = "set"+key.ToLower()
-		EndIf
+			If methName = key[1] Then
+				observer._indexed = False
+			ElseIf methName = key[2] Then
+				observer._indexed = True
+			EndIf
 		
-		Local tm:TMethod = Null
-		For tm = EachIn methods
-			If tm.Name().ToLower() = setter Then
-				
-				argTypes = tm.ArgTypes()
-				If tm.TypeId() <> IntTypeId Or argTypes.Length <> 1 Or argTypes[0] <> tf.TypeId() Then
-					DebugLog "Cannot apply automatic observing to "+id.Name()+"@"+key
-					Continue ' Cannot apply automatic observing to this
-				EndIf
-				
-				mp = Byte Ptr Ptr(Byte Ptr(id._class)+tm._index)
-				mc = mp[0]
-				
-				observer = New TObserverMethod
-				observer._field = tf
-				observer._key = key
-				observer._method = mc
-				
-				closure = setterForObserverMethod(observer)
-				Assert closure, "Could not create closure for observing key"
-				
-				mp[0] = closure
-				
+			argTypes = tm.ArgTypes()
+			If tm.TypeId() <> IntTypeId Or argTypes.Length <> 1+observer._indexed Then
+				DebugLog "Cannot apply automatic observing to "+id.Name()+"@"+key[0]
 				Exit
-				
 			EndIf
+		
+			observer._type = argTypes[0]
+			
+			closure = setterForObserverMethod(observer)
+			Assert closure, "Could not create closure for observing key"
+		
+			mp[0] = closure
+			
+			DebugLog "Observing calling of "+methName
+			
+			Exit
 		Next
 	Next
 End Function
