@@ -135,8 +135,8 @@ Type TNotificationCenter
 	Method Dispose()
 		ProcessQueue()
 		?Threaded
-		LockDefaults()
 		Local thread:TThread = CurrentThread()
+		LockDefaults()
 		If _defaults.ValueForKey(thread) = Self Then
 			_defaults.Remove(thread)
 		EndIf
@@ -145,6 +145,17 @@ Type TNotificationCenter
 		If _default = Self Then
 			_default = Null
 		EndIf
+		?
+	End Method
+	
+	Method MakeDefault()
+		?Threaded
+		Local thread:TThread = CurrentThread()
+		LockDefaults()
+		_defaults.Insert(thread, Self)
+		UnlockDefaults()
+		?Not Threaded
+		_default = Self
 		?
 	End Method
 	
@@ -196,7 +207,7 @@ Type TNotificationCenter
 		Next
 	End Method
 	
-	' Posts a notification to another notification center
+	' Used to post notifications from different threads
 	Method EnqueueNotificationWithName(notification:String, obj:Object=Null, userinfo:Object=Null)
 		?Threaded
 		LockCenter()
@@ -285,4 +296,18 @@ Type TNotificationCenter
 		UnlockCenter()
 		?
 	End Method
+	
+	?Threaded
+	Function PruneDefaults()
+		LockDefaults()
+		Local defaults:TMap = _defaults.Copy()
+		For Local thread:TThread = EachIn defaults.Keys()
+			If thread.Running() Then
+				Continue
+			EndIf
+			_defaults.Remove(thread)
+		Next
+		UnlockDefaults()
+	End Function
+	?
 End Type
