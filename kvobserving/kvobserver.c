@@ -123,7 +123,7 @@ ffi_closure* setterForObserverMethod(bbTObserver* observer)
     ffi_type *returnType;
     args[0] = &ffi_type_pointer;
     
-    cif = (ffi_closure*)malloc(sizeof(ffi_closure));
+    cif = (ffi_cif*)malloc(sizeof(ffi_cif));
     if ( cif == NULL )
         return NULL;
     
