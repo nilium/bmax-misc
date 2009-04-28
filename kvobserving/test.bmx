@@ -23,6 +23,7 @@ EndRem
 SuperStrict
 
 'buildopt:threads
+'builtopt:verbose
 
 Import Brl.Blitz
 Import Brl.Reflection
@@ -31,7 +32,7 @@ Import Brl.Threads
 Import "keyvalueobserving.bmx"
 Import "keyvalueprotocol.bmx"
 
-Type Observed Extends TKeyValueProtocol
+Type Observed Extends TKeyValueProtocol {Keys="Name, Rabble"}
 	Field _name:String = "Default Value"
 	Field _values:String[] = ["foo 1", "bar 2", "baz 3", "big 4"] {Key="Rabble" SetterForIndex="SetSomethingForIndex" GetterForIndex="SomethingForIndex"}
 	
@@ -43,22 +44,28 @@ Type Observed Extends TKeyValueProtocol
 		_name = name
 	End Method
 	
-	Method SomethingForIndex:Object(idx:Int)
+	Method RabbleForIndex:Object(idx:Int)
 		Return _values[idx]
 	End Method
 	
-	Method SetSomethingForIndex(val:String, idx:Int)
+	Method SetRabbleForIndex(val:String, idx:Int)
 		_values[idx] = val
 	End Method
 End Type
 
 Type Observer
 	Method itsValueDidChange(notification:TNotification)
-		Print "Value has changed to "+ValueForKeyInObject(notification.AssociatedObject(), String(TMap(notification.UserInfo()).ValueForKey("Key"))).ToString()
+		Local info:TMap = TMap(notification.UserInfo())
+		Local key:String = String(info.ValueForKey("Key"))
+		Local obj:Object = notification.AssociatedObject()
+		Local value:Object = ValueForKeyInObject(obj, key)
+		Print "Value of @"+key+" has changed to "+value.ToString()
 	End Method
 	
 	Method willChange(notification:TNotification)
-		Print "Value is going to change"
+			Local info:TMap = TMap(notification.UserInfo())
+			Local key:String = String(info.ValueForKey("Key"))
+		Print "Value of @"+key+" is going to change"
 	End Method
 	
 	Method anyNotification(notification:TNotification)
@@ -80,14 +87,10 @@ Local nc:TNotificationCenter = TNotificationCenter.DefaultCenter()
 Local obs:Observer = New Observer
 ' obs is watching for the WillChangeValueForKeyNotification from any object
 nc.AddObserver(obs, "willChange", WillChangeValueForKeyNotification)
-' obs is watching for a specific notification from any object
-nc.AddObserver(obs, "anyNotification")
 ' obs is watching for any notification from the 'f' object
 nc.AddObserver(obs, "anyNotification2", Null, f)
 ' obs watching for a specific notification from any object
 nc.AddObserver(obs, "itsValueDidChange", DidChangeValueForKeyNotification)
-' obs watching for a specific notification from the 'obs' object (will never be called unless obs posts a notification)
-nc.AddObserver(obs, "itsValueDidChange", DidChangeValueForKeyNotification, obs)
 
 Print f.Name()
 f.SetName("Bernard")
@@ -96,6 +99,10 @@ Print f.Name()
 f.SetValueForKey("Name", "Dr. Davis")
 Print String(f.ValueForKey("Name"))
 
+' Observers expecting info from the old f won't be called anymore
+f:Observed = New Observed
+
+Print "Wimbleton"
 Print String(f.ValueForKey("Rabble[0]"))
 Print String(f.ValueForKey("Rabble[1]"))
 Print String(f.ValueForKey("Rabble[2]"))
