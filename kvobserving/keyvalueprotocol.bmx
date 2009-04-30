@@ -45,20 +45,16 @@ Function kvp_valueForKeyInObject:Object(obj:Object, key:String)
 			elemIndex = idx
 		EndIf
 		
-		Local getter:String = key
+		Local suffix$ = ""
 		If elemIndex > -1 Then
-			getter :+ "forindex"
+			suffix :+ "atindex"
 		EndIf
-		Local tm:TMethod = tid.FindMethod(getter)
-		If tm Then
-			If tm.Metadata("Deprecated").ToInt() Then
-				DebugLog "Accessing deprecated key @"+key
-			EndIf
 		
-			If tm.Metadata("Restricted").ToInt() Then
-				Throw TKeyValueException.Exception(eValueAccessRestrictedException)
-			EndIf
-			
+		Local tm:TMethod = tid.FindMethod("get"+key+suffix)
+		If Not tm Then tm = tid.FindMethod(key+suffix)
+		If Not tm Then tm = tid.FindMethod("is"+key+suffix)
+		
+		If tm Then			
 			If elemIndex > -1 Then
 				Return tm.Invoke(obj, [String(elemIndex)])
 			EndIf
@@ -66,56 +62,38 @@ Function kvp_valueForKeyInObject:Object(obj:Object, key:String)
 			Return tm.Invoke(obj, Null)
 		EndIf
 		
-		For Local keyfield:TField = EachIn tid.EnumFields()
-			keyname = keyfield.Metadata("Key").ToLower()
-			If keyname = Null Then
-				keyname = keyfield.Name().ToLower()
+		If elemIndex = -1 Then
+			Local counter:TMethod = tid.FindMethod("countof"+key)
+			tm = tid.FindMethod("objectin"+key+"atindex")
+			If counter And tm Then
+				Local count:Int = String(counter.Invoke(obj, Null)).ToInt()
+				Local arr:Object[count]
+				For Local i:Int = 0 Until count
+					arr[i] = tm.Invoke(obj, [String(i)])
+				Next
+				Return arr
 			EndIf
-			
-			If keyname <> key Then
-				Continue
-			EndIf
-			
-			If keyfield.Metadata("Deprecated") Then
-				DebugLog "Accessing deprecated key @"+key
-			EndIf
-			
-			If keyfield.Metadata("Restricted").ToInt() Or keyfield.Metadata("WriteOnly") Then
-				Throw TKeyValueException.Exception(eValueAccessRestrictedException)
-			EndIf
-			
-			If elemIndex > -1 Then
-				getter = keyfield.Metadata("Getter")
-			Else
-				getter = keyfield.Metadata("GetterForIndex")
-			EndIf
-			
-			If getter Then
-				tm = tid.FindMethod(getter)
-				
-				If tm Then
-					If tm.Metadata("Deprecated") Then
-						DebugLog "Accessing deprecated key @"+key
-					EndIf
-
-					If tm.Metadata("Restricted").ToInt() Then
-						Throw TKeyValueException.Exception(eValueAccessRestrictedException)
-					EndIf
-				
-					If elemIndex > -1 Then
-						Return tm.Invoke(obj, [String(elemIndex)])
-					EndIf
-					
-					Return tm.Invoke(obj, Null)
+		EndIf
+		
+		If tid.Metadata("AccessInstanceVariablesDirectly").ToInt() Then
+			Local keyField:TField = tid.FindField("_"+key)
+			If Not keyField Then keyField = tid.FindField("_is"+key)
+			If Not keyField Then keyField = tid.FindField(key)
+			If Not keyField Then keyField = tid.FindField("is"+key)
+		
+			If keyField And keyField.Metadata("Restricted").ToInt() = 0 Then
+				If elemIndex > -1 Then
+					Return keyfield.TypeId().GetArrayElement(keyfield.Get(obj), elemIndex)
+				Else
+					Return keyfield.Get(obj)
 				EndIf
 			EndIf
-			
-			If elemIndex > -1 Then
-				Return keyfield.TypeId().GetArrayElement(keyfield.Get(obj), elemIndex)
-			Else
-				Return keyfield.Get(obj)
-			EndIf
-		Next
+		EndIf
+		
+		tm = tid.FindMethod("valueforundefinedkey")
+		If tm Then
+			Return tm.Invoke(obj, [key])
+		EndIf
 		
 		Return Null
 	Else
@@ -141,6 +119,7 @@ Function kvp_setValueForKeyInObject(obj:Object, key:String, value:Object)
 	Local keyname$
 	If dot = -1 Then
 		Local tid:TTypeId = TTypeId.ForObject(obj)
+		
 		Local elemIndex:Int = key.Find("[")
 		If elemIndex <> -1 Then
 			Local idx:Int = key[elemIndex+1..key.Find("]")].ToInt()
@@ -149,19 +128,14 @@ Function kvp_setValueForKeyInObject(obj:Object, key:String, value:Object)
 		EndIf
 		
 		Local setter:String = "set"+key
-		If elemIndex > -1 Then
-			setter :+ "forindex"
-		EndIf
-		Local tm:TMethod = tid.FindMethod(setter)
-		If tm Then
-			If tm.Metadata("Deprecated").ToInt() Then
-				DebugLog "Setting deprecated key @"+key
-			EndIf
 		
-			If tm.Metadata("Restricted").ToInt() Then
-				Throw TKeyValueException.Exception(eValueAccessRestrictedException)
-			EndIf
-			
+		If elemIndex > -1 Then
+			setter :+ "atindex"
+		EndIf
+		
+		Local tm:TMethod = tid.FindMethod(setter)
+		
+		If tm Then
 			If elemIndex > -1 Then
 				tm.Invoke(obj, [value, Object(String(elemIndex))])
 			Else
@@ -170,60 +144,29 @@ Function kvp_setValueForKeyInObject(obj:Object, key:String, value:Object)
 			Return
 		EndIf
 		
-		For Local keyfield:TField = EachIn tid.EnumFields()			
-			keyname = keyfield.Metadata("Key").ToLower()
-			If keyname = Null Then
-				keyname = keyfield.Name().ToLower()
-			EndIf
+		If tid.Metadata("AccessInstanceVariablesDirectly").ToInt() Then
+			Local keyField:TField = tid.FindField("_"+key)
+			If Not keyField Then keyField = tid.FindField("_is"+key)
+			If Not keyField Then keyField = tid.FindField(key)
+			If Not keyField Then keyField = tid.FindField("is"+key)
 		
-			If keyname <> key Then
-				Continue
-			EndIf
-			
-			If keyfield.Metadata("Deprecated").ToInt() Then
-				DebugLog "Setting deprecated key @"+key
-			EndIf
-			
-			If keyfield.Metadata("Restricted").ToInt() Or keyfield.Metadata("ReadOnly").ToInt() Then
-				Throw TKeyValueException.Exception(eValueAccessRestrictedException)
-			EndIf
-		
-			Local setter:String
-			If elemIndex > -1 Then
-				setter = keyfield.Metadata("SetterForIndex")
-			Else
-				setter = keyfield.Metadata("Setter")
-			EndIf
-		
-			If setter Then
-				Local tm:TMethod = tid.FindMethod(setter)
-				If tm Then
-					If tm.Metadata("Deprecated").ToInt() Then
-						DebugLog "Setting deprecated key @"+key
-					EndIf
-
-					If tm.Metadata("Restricted").ToInt() Then
-						Throw TKeyValueException.Exception(eValueAccessRestrictedException)
-					EndIf
-					
-					If elemIndex > -1 Then
-						tm.Invoke(obj, [value, Object(String(elemIndex))])
-						Return
-					EndIf
-					
-					tm.Invoke(obj, [value])
+			If keyField And keyfield.Metadata("Restricted").ToInt() = 0 And keyfield.Metadata("ReadOnly").ToInt() = 0 Then
+				If elemIndex > -1 Then
+					keyfield.TypeId().SetArrayElement(keyfield.Get(obj), elemIndex, value)
+					Return
+				Else
+					keyfield.Set(obj, value)
 					Return
 				EndIf
 			EndIf
-			
-			If elemIndex > -1 Then
-				keyfield.TypeId().SetArrayElement(keyfield.Get(obj), elemIndex, value)
-				Return
-			Else
-				keyfield.Set(obj, value)
-				Return
-			EndIf
-		Next
+		EndIf
+		
+		tm = tid.FindMethod("setvalueforundefinedkey")
+		If tm Then
+			tm.Invoke(obj, [Object key, value])
+			Return
+		EndIf
+		
 		Throw TKeyValueException.Exception(eCannotSetKeyValueException)
 	Else
 		keyname = key[..dot]

@@ -81,6 +81,8 @@ Type TObserverMethod {ManualObserving}
 	Field _indexed:Int {Restricted}
 	Field _method:Byte Ptr {Restricted}
  	Field _type:TTypeId {Restricted}
+	Field _cif:Byte Ptr
+	Field _closure:Byte Ptr
 	
 	?Threaded
 	Field _lock:TMutex {Restricted} ' definitely restricted
@@ -145,14 +147,10 @@ Function AddObservingForType( id:TTypeId )
 	For Local tm:TMethod = EachIn methods
 		methName = tm.Name().ToLower()
 		
-		Print methName
-		
 		For Local key:String[] = EachIn keys
 			If key[1] <> methName And key[2] <> methName Then
 				Continue
 			EndIf
-			
-			Print key[0]+" "+key[1]+" "+key[2]
 			
 			mp = Byte Ptr Ptr(Byte Ptr(id._class)+tm._index)
 			mc = mp[0]
@@ -177,10 +175,8 @@ Function AddObservingForType( id:TTypeId )
 			
 			closure = setterForObserverMethod(observer)
 			Assert closure, "Could not create closure for observing key"
-		
-			mp[0] = closure
 			
-			DebugLog "Observing calling of "+methName
+			mp[0] = closure
 			
 			Exit
 		Next

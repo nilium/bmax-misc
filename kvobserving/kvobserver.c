@@ -27,7 +27,8 @@ THE SOFTWARE.
 
 // this is a bad thing to do, don't copy this
 typedef struct {
-	BBObject obj;
+    BBClass* clas;
+    int refs;
 	BBString* key;
 	int indexed;
 	union {
@@ -59,6 +60,8 @@ typedef struct {
 	};
 	*/
 	BBObject* type;
+    ffi_cif* cif;
+    ffi_closure* closure;
 #ifdef THREADED
 	BBObject* lock;
 #endif
@@ -86,7 +89,7 @@ extern BBObject *brl_reflection_ByteTypeId, *brl_reflection_ShortTypeId,
 
 // This was originally written in BMax, but I hate working with pointers in
 // BMax, so now it's written in C.	Isn't that just awesome!?
-static void autoObserverSetter(ffi_cif* cif, void* result, void** args, void* userdata) {
+void autoObserverSetter(ffi_cif* cif, void* result, void** args, void* userdata) {
 	bbTObserver* observer = (bbTObserver*)userdata;
 	
 	#ifdef THREADED
@@ -186,8 +189,7 @@ ffi_closure* setterForObserverMethod(bbTObserver* observer)
 	ffi_type *args[3] = {&ffi_type_pointer, NULL, &ffi_type_sint32};
 	ffi_type *returnType;
 	
-	cif = (ffi_cif*)malloc(sizeof(ffi_cif));
-	if ( cif == NULL )
+	if ( !(cif = (ffi_cif*)malloc(sizeof(ffi_cif))) )
 		return NULL;
 	
 	BBObject* typeid = observer->type;
@@ -214,6 +216,7 @@ ffi_closure* setterForObserverMethod(bbTObserver* observer)
 		return NULL;
 	}
 	
+	/*
 	closure = mmap(NULL, sizeof(ffi_closure),
 		PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0);
 	
@@ -222,26 +225,37 @@ ffi_closure* setterForObserverMethod(bbTObserver* observer)
 		free(cif);
 		return NULL;
 	}
+	*/
+    if ( !(closure = (ffi_closure*)malloc(sizeof(ffi_closure))) ) {
+        fprintf(stderr, "ERROR: Failed to allocate ffi_closure\n");
+        free(cif);
+        return NULL;
+    }
 	
 	status = ffi_prep_closure(closure, cif, &autoObserverSetter, observer);
 	
 	if (status == FFI_OK)
 	{
-		if ( mprotect(closure, sizeof(closure), PROT_READ|PROT_EXEC) == 0 )
-		{
-			BBRETAIN(&observer->obj);
-			return closure;
-		}
-		else
-		{
-			fprintf(stderr, "ERROR: Failed to set closure's protection\n");
-		}
+//		if ( mprotect(closure, sizeof(closure), PROT_READ|PROT_EXEC) == 0 )
+//		{
+			BBRETAIN(observer);
+            BBRETAIN(observer->key);
+            BBRETAIN(observer->type);
+            observer->cif = cif;
+            observer->closure = closure;
+            return closure;
+//		}
+//		else
+//		{
+//			fprintf(stderr, "ERROR: Failed to set closure's protection\n");
+//		}
 	}
 	
 	fprintf(stderr, "ERROR: Failed to create closure\n");
-	if ( munmap(closure, sizeof(ffi_closure)) != 0 )
-		fprintf(stderr, "ERROR: Failed to unmap ffi_closure\n");
-	
+//	if ( munmap(closure, sizeof(ffi_closure)) != 0 )
+//		fprintf(stderr, "ERROR: Failed to unmap ffi_closure\n");
+
+    free(closure);
 	free(cif);
 	
 	return NULL;

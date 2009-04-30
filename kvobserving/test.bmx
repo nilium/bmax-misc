@@ -22,90 +22,65 @@ EndRem
 
 SuperStrict
 
-'buildopt:threads
-'builtopt:verbose
-
-Import Brl.Blitz
-Import Brl.Reflection
-Import Brl.Threads
-
-Import "keyvalueobserving.bmx"
 Import "keyvalueprotocol.bmx"
+Import "keyvalueobserving.bmx"
 
-Type Observed Extends TKeyValueProtocol {Keys="Name, Rabble"}
-	Field _name:String = "Default Value"
-	Field _values:String[] = ["foo 1", "bar 2", "baz 3", "big 4"] {Key="Rabble" SetterForIndex="SetSomethingForIndex" GetterForIndex="SomethingForIndex"}
+
+
+Type Foobar {Keys="Name, Value"}
+	Field _name$ {Restricted}
+	Field _value:Object {Restricted}
 	
-	Method Name:String()
+	Method SetName(n$)
+		_name = n
+	End Method
+	
+	Method Name$()
 		Return _name
 	End Method
 	
-	Method SetName(name:String)
-		_name = name
+	Method SetValue(val:Object)
+		_value = val
 	End Method
 	
-	Method RabbleForIndex:Object(idx:Int)
-		Return _values[idx]
-	End Method
-	
-	Method SetRabbleForIndex(val:String, idx:Int)
-		_values[idx] = val
+	Method Value:Object()
+		Return _value
 	End Method
 End Type
 
-Type Observer
-	Method itsValueDidChange(notification:TNotification)
-		Local info:TMap = TMap(notification.UserInfo())
-		Local key:String = String(info.ValueForKey("Key"))
-		Local obj:Object = notification.AssociatedObject()
-		Local value:Object = ValueForKeyInObject(obj, key)
-		Print "Value of @"+key+" has changed to "+value.ToString()
+Type FoobarObserver
+	Method NameWillChange(n:TNotification)
+		If String(TMap(n.UserInfo()).ValueForKey("Key")) = "name" Then
+			Print "Preparing for name change"
+		EndIf
 	End Method
 	
-	Method willChange(notification:TNotification)
-			Local info:TMap = TMap(notification.UserInfo())
-			Local key:String = String(info.ValueForKey("Key"))
-		Print "Value of @"+key+" is going to change"
-	End Method
-	
-	Method anyNotification(notification:TNotification)
-		Print "From anyNotification"
-	End Method
-	
-	Method anyNotification2(notification:TNotification)
-		Print "From anyNotification2"
+	Method NameChanged(n:TNotification)
+		Local userinfo:TMap = TMap(n.UserInfo())
+		Local obj:Object = n.AssociatedObject()
+		Local key:String = String(userinfo.ValueForKey("Key"))
+		
+		If key = "name" Then
+			Print key+" changed to "+String(ValueForKeyInObject(obj, key))
+		EndIf
 	End Method
 End Type
 
-AddObservingForType(TTypeId.ForName("Observed"))
-
-' test
-
-Local f:Observed = New Observed
+AddObservingForType(TTypeId.ForName("Foobar"))
 
 Local nc:TNotificationCenter = TNotificationCenter.DefaultCenter()
-Local obs:Observer = New Observer
-' obs is watching for the WillChangeValueForKeyNotification from any object
-nc.AddObserver(obs, "willChange", WillChangeValueForKeyNotification)
-' obs is watching for any notification from the 'f' object
-nc.AddObserver(obs, "anyNotification2", Null, f)
-' obs watching for a specific notification from any object
-nc.AddObserver(obs, "itsValueDidChange", DidChangeValueForKeyNotification)
 
-Print f.Name()
-f.SetName("Bernard")
-Print f.Name()
+Local observer:Object = New FoobarObserver
+Local foo:Foobar = New Foobar
 
-f.SetValueForKey("Name", "Dr. Davis")
-Print String(f.ValueForKey("Name"))
+nc.AddObserver(observer, "NameWillChange", WillChangeValueForKeyNotification, foo)
+nc.AddObserver(observer, "NameChanged", DidChangeValueForKeyNotification, foo)
 
-' Observers expecting info from the old f won't be called anymore
-f:Observed = New Observed
-
-Print "Wimbleton"
-Print String(f.ValueForKey("Rabble[0]"))
-Print String(f.ValueForKey("Rabble[1]"))
-Print String(f.ValueForKey("Rabble[2]"))
-Print String(f.ValueForKey("Rabble[3]"))
-f.SetValueForKey("Rabble[3]", "Foobar")
-Print String(f.ValueForKey("Rabble[3]"))
+foo.SetName("Name")
+Print foo.Name()
+foo.SetValue("Foo")
+Print String(foo.Value())
+foo.SetName("Wimbleton")
+Print foo.Name()
+foo.SetValue(Null)
+Print foo.Name()
