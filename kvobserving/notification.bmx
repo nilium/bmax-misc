@@ -81,24 +81,15 @@ Type TNotificationObserver {Immutable}
 End Type
 
 Public
-'buildopt:threads
+
 Type TNotificationCenter
-	Field _queue:TList = New TList {Restricted}
-	Field _observers:TList = New TList {Restricted}
+	Field _queue:TList {Restricted}
+	Field _observers:TList {Restricted}
 	
 	?Threaded
-	Global _defaults:TMap = New TMap
-	Global _defaultsMutex:TMutex = TMutex.Create()
+	Global _default:TThreadData
 	
-	Field _lock:TMutex = TMutex.Create()
-	
-	Function LockDefaults()
-		_defaultsMutex.Lock()
-	End Function
-	
-	Function UnlockDefaults()
-		_defaultsMutex.Unlock()
-	End Function
+	Field _lock:TMutex
 	
 	Method LockCenter()
 		_lock.Lock()
@@ -112,48 +103,59 @@ Type TNotificationCenter
 	Global _default:TNotificationCenter
 	?
 	
+	Method New()
+		?Threaded
+		_lock = TMutex.Create()
+		?
+		
+		_queue = New TList
+		_observers = New TList
+	End Method
+	
+	Method Delete()
+		?Threaded
+		_lock.Close()
+		?
+	End Method
+	
 	Function DefaultCenter:TNotificationCenter()
 		?Threaded
-		Local curThread:TThread = CurrentThread()
-		LockDefaults()
-		Local center:TNotificationCenter = TNotificationCenter(_defaults.ValueForKey(curThread))
-		If center = Null Then
-			center = New TNotificationCenter
-			_defaults.Insert(curThread, center)
-		EndIf
-		UnlockDefaults()
-		Return center
-		
+			Local center:TNotificationCenter = TNotificationCenter(_default.GetValue())
+			
+			If center = Null Then
+				center = New TNotificationCenter
+				_default.SetValue(center)
+			EndIf
+			
+			Return center
 		?Not Threaded
-		If _default = Null Then
-			_default = New TNotificationCenter
-		EndIf
-		Return _default
+			If _default = Null Then
+				_default = New TNotificationCenter
+			EndIf
+			Return _default
 		?
 	End Function
 	
 	Method Dispose()
 		ProcessQueue()
 		?Threaded
-		Local thread:TThread = CurrentThread()
-		LockDefaults()
-		If _defaults.ValueForKey(thread) = Self Then
-			_defaults.Remove(thread)
+		
+		If _default.GetValue() = Self Then
+			_default.SetValue(Null)
 		EndIf
-		UnlockDefaults()
+		
 		?Not Threaded
+		
 		If _default = Self Then
 			_default = Null
 		EndIf
+		
 		?
 	End Method
 	
 	Method MakeDefault()
 		?Threaded
-		Local thread:TThread = CurrentThread()
-		LockDefaults()
-		_defaults.Insert(thread, Self)
-		UnlockDefaults()
+		_default.SetValue(Self)
 		?Not Threaded
 		_default = Self
 		?
@@ -296,18 +298,8 @@ Type TNotificationCenter
 		UnlockCenter()
 		?
 	End Method
-	
-	?Threaded
-	Function PruneDefaults()
-		LockDefaults()
-		Local defaults:TMap = _defaults.Copy()
-		For Local thread:TThread = EachIn defaults.Keys()
-			If thread.Running() Then
-				Continue
-			EndIf
-			_defaults.Remove(thread)
-		Next
-		UnlockDefaults()
-	End Function
-	?
 End Type
+
+?Threaded
+TNotificationCenter._default = TThreadData.Create()
+?
