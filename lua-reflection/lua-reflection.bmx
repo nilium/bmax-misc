@@ -310,13 +310,13 @@ Function LREF_TypeFieldGet:Int(state:Byte Ptr)
 				lua_pushnumber( state, rfield.GetDouble(obj) )
 
 			Case ByteTypeId, ShortTypeId, IntTypeId
-				lua_pushnumber( state, Long rfield.GetInt(obj) )
+				lua_pushnumber( state, rfield.GetInt(obj) )
 
 			Case LongTypeId
-				lua_pushnumber( state, Long rfield.GetLong(obj) )
+				lua_pushnumber( state, rfield.GetLong(obj) )
 
 			Case StringTypeId
-				lua_pushnumber( state, Long rfield.GetString(obj) )
+				lua_pushstring( state, rfield.GetString(obj) )
 
 			Case ArrayTypeId
 				lua_pushbmaxarray( state, rfield.Get(obj), False )
@@ -506,8 +506,8 @@ Function LREF_GetValue:Object( state:Byte Ptr, idx:Int )
 			lua_rawget( state, idx )
 
 			If lua_type( state, -1 ) <> LUA_TUSERDATA Then	   ' Treat value as an array
-				Local arr:Object[] = lua_tobmaxarray( state, idx )
 				lua_pop( state, 1 )
+				Local arr:Object[] = lua_tobmaxarray( state, idx )
 				
 				Return arr
 			ElseIf lua_type(state, -1) = LUA_TUSERDATA Then
@@ -844,10 +844,10 @@ pushing the object onto the stack.  Some speed may be gained in setting this to
 True.  Defaults to False.
 EndRem
 Function lua_pushbmaxobject( state:Byte Ptr, obj:Object, excludeMethods:Int=False )
-	If excludeMethods Then
-		LREF_PushBMaxObject( state, obj, Null, False, False, False, True )
-	Else
+	If excludeMethods = False Then
 		LREF_ConstructBMaxObject( state, obj, Null )
+	Else
+		LREF_PushBMaxObject( state, obj, Null, False, False, False, True )
 	EndIf
 End Function
 
