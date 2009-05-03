@@ -313,7 +313,12 @@ Function LREF_TypeFieldGet:Int(state:Byte Ptr)
 				lua_pushbmaxarray( state, rfield.Get(obj), False )
 
 			Default
-				LREF_ConstructBMaxObject( state, rfield.Get(obj), typeid )
+				Local fval:Object = rfield.Get(obj)
+				If fval = Null Then
+					lua_pushnil(state)
+				Else
+					LREF_ConstructBMaxObject( state, fval, Null )
+				EndIf
 		End Select
 	Else
 		lua_rawget( state, 1 )
@@ -419,7 +424,7 @@ Function LREF_ConstructBMaxObject( state:Byte Ptr, obj:Object, typeId:TTypeId )
 
 	If lua_type( state, -1 ) = LUA_TFUNCTION Then
 		' In the event that a constructor for the object's type already exists, use that
-		
+
 		lref_pushrawobject( state, obj )
 
 		LREF_AttachMetaTable( state, -1, LREF_METATABLE_OBJECTS )
