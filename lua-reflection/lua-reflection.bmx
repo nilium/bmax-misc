@@ -419,8 +419,7 @@ Function LREF_ConstructBMaxObject( state:Byte Ptr, obj:Object, typeId:TTypeId )
 
 	If lua_type( state, -1 ) = LUA_TFUNCTION Then
 		' In the event that a constructor for the object's type already exists, use that
-		Print "Using existing constructor"
-
+		
 		lref_pushrawobject( state, obj )
 
 		LREF_AttachMetaTable( state, -1, LREF_METATABLE_OBJECTS )
