@@ -77,6 +77,13 @@ Const LREF_METATABLE_FIELDS:String = "LREF_metatable_fields"	' Field access meta
 Const LREF_METATABLE_OBJECTS:String = "LREF_metatable_objects"  ' Userdata collection metatable
 Const LREF_USE_EXCEPTIONS:Int = True
 
+Const LREF_META_EXPOSE$ = "expose"
+Const LREF_META_HIDDEN$ = "hidden"
+Const LREF_META_HIDEFIELDS$ = "hidefields"
+Const LREF_META_RENAME$ = "rename"
+Const LREF_META_NOCLASS$ = "noclass"
+Const LREF_META_STATIC$ = "static"
+
 Public
 
 ' Exception when an error occurs
@@ -224,16 +231,18 @@ Function LREF_TypeFieldSet:Int(state:Byte Ptr)
 
 	If obj Then
 		typeid = TTypeId.ForObject(obj)
-		rfield = typeid.FindField(name)
+		If typeid Then
+			rfield = typeid.FindField(name)
+		EndIf
 	EndIf
 	
 	If rfield <> Null Then
-		hidden = rfield.MetaData("hidden").ToInt()
+		hidden = rfield.MetaData(LREF_META_HIDDEN).ToInt()
 	
 		' Ensure that the field is not hidden in a supertype
 		superid = typeid.SuperType()
 		While superid <> Null
-			If ( superid.MetaData("exposed").ToInt()=0 Or superid.MetaData("hidefields").ToInt() ) And superid.FindField(name) <> Null Then
+			If ( superid.MetaData(LREF_META_EXPOSE).ToInt()=0 Or superid.MetaData(LREF_META_HIDEFIELDS).ToInt() ) And superid.FindField(name) <> Null Then
 				hidden = True
 				Exit
 			EndIf
@@ -275,16 +284,16 @@ Function LREF_TypeFieldGet:Int(state:Byte Ptr)
 		typeid = TTypeId.ForObject(obj)
 
 		If typeid Then
-			rfield = typeid.FindField(lua_tostring( state, -1 ))
+			rfield = typeid.FindField(name)
 		EndIf
 	EndIf
 	
 	If rfield <> Null Then
-		hidden = rfield.MetaData("hidden").ToInt()
-	
+		hidden = rfield.MetaData(LREF_META_HIDDEN).ToInt()
+		
 		superid = typeid.SuperType()
-		While superid <> Null
-			If ( superid.MetaData("exposed").ToInt()=0 Or superid.MetaData("hidefields").ToInt()>0 ) And superid.FindField(name) <> Null Then
+		While superid <> Null And superid <> ObjectTypeId And hidden < 1
+			If ( superid.MetaData(LREF_META_EXPOSE).ToInt()=0 Or superid.MetaData(LREF_META_HIDEFIELDS).ToInt()>0 ) And superid.FindField(name) <> Null Then
 				hidden = True
 				Exit
 			EndIf
@@ -539,19 +548,19 @@ Function LREF_PushBMaxObject( state:Byte Ptr, obj:Object, from:TTypeId, expose:I
 	EndIf
 	
 	If expose = -1 Then
-		expose = from.MetaData("expose").ToInt()
+		expose = from.MetaData(LREF_META_EXPOSE).ToInt()
 	EndIf
 	
 	If static = -1 Then
-		static = from.MetaData("static").ToInt()
+		static = from.MetaData(LREF_META_STATIC).ToInt()
 	EndIf
 	
 	If noclass = -1 Then
-		noclass = from.MetaData("noclass").ToInt()
+		noclass = from.MetaData(LREF_META_NOCLASS).ToInt()
 	EndIf
 	
 	If hidefields = -1 Then
-		hidefields = from.MetaData("hidefields").ToInt()
+		hidefields = from.MetaData(LREF_META_HIDEFIELDS).ToInt()
 	EndIf
 	
 	If objIdx = -1 Then
@@ -586,11 +595,11 @@ Function LREF_PushBMaxObject( state:Byte Ptr, obj:Object, from:TTypeId, expose:I
 		For methIter = EachIn from.EnumMethods()
 			name = methIter.Name()
 
-			If from.MetaData("hidden").ToInt() Or name.ToLower() = "delete" Or name.ToLower() = "new" Then
+			If from.MetaData(LREF_META_HIDDEN).ToInt() Or name.ToLower() = "delete" Or name.ToLower() = "new" Then
 				Continue
 			EndIf
 
-			rename = methIter.MetaData("rename")
+			rename = methIter.MetaData(LREF_META_RENAME)
 			If rename <> "" Then
 				name = rename
 			EndIf
@@ -753,33 +762,33 @@ Rem:doc
 	@param state The Lua state you'll be exposing the Type to.
 	@param from The TTypeID for the Type you're exposing to Lua.
 	@param expose Whether or not to expose the type. Left at -1, this value will be
-retrieved from the Type's "expose" attribute.
+retrieved from the Type's LREF_META_EXPOSE attribute.
 	@param static Whether or not the type is exposed as a static class. Left at -1,
-this value will be retrieved from the Type's "static" attribute.
+this value will be retrieved from the Type's LREF_META_STATIC attribute.
 	@param noclass Whether or not the type is exposed as a set of functions or
 static class. This parameter only takes effect if the type is also static. Left
-at -1, this value will be retrieved from the Type's "noclass" attribute.
+at -1, this value will be retrieved from the Type's LREF_META_NOCLASS attribute.
 	@param hidefields Whether or not the type is exposed with accessible fields. If
-this is set to true (or the Type has its "hidefields" attribute set to a
+this is set to true (or the Type has its LREF_META_HIDEFIELDS attribute set to a
 non-zero value), the Type's fields will be inaccessible in Lua. Left at -1, this
-value will be retrieved from the Type's "hidefields" attribute.
+value will be retrieved from the Type's LREF_META_HIDEFIELDS attribute.
 
 EndRem
 Function lua_implementtype( state:Byte Ptr, from:TTypeId, expose:Int=-1, static:Int=-1, noclass:Int=-1, hidefields%=-1 )
 	If expose = -1 Then
-		expose = from.MetaData("expose").ToInt()
+		expose = from.MetaData(LREF_META_EXPOSE).ToInt()
 	EndIf
 
 	If static = -1 Then
-		static = from.MetaData("static").ToInt()
+		static = from.MetaData(LREF_META_STATIC).ToInt()
 	EndIf
 
 	If noclass = -1 Then
-		noclass = from.MetaData("noclass").ToInt()
+		noclass = from.MetaData(LREF_META_NOCLASS).ToInt()
 	EndIf
 
 	If hidefields = -1 Then
-		hidefields = from.MetaData("hidefields").ToInt()
+		hidefields = from.MetaData(LREF_META_HIDEFIELDS).ToInt()
 	EndIf
 
 	If expose Then
