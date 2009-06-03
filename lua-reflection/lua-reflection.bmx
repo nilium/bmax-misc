@@ -65,8 +65,8 @@ Rem:doc
 	
 		In the case of "late" binding, this will not add the methods to the object's
 	table until the method something tries to get the method from the object.  This
-	can remove some bottlenecks surrounding the pushing of objects, but may present
-	a minor speed hit when 
+	can remove some bottlenecks surrounding the pushing of objects.  The first call to an
+	object's method may take longer than normal as a result.
 End Rem
 
 Private
