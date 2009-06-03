@@ -48,11 +48,9 @@ Rem:doc
 	in Lua rather than as fields of a table. Only methodName() is required to call
 	them. Fields are inaccessible using this attribute, even if static is not set.
 
-		{rename="newName"} - A form of aliasing. Renames a method, such that if a
-	method is named lua_Print and it has the attribute {rename="Print"}, the
-	function in Lua will be Print, not lua_Print. This can only be applied to
-	methods, currently. I may change this later. This attribute does not apply to
-	fields.
+		{rename="newName"} - A form of aliasing. Renames a method or type such that
+	access to the type or method in Lua must use the new name, not the one used by
+	BlitzMax source code.  Does not apply to fields.
 
 		{hidden} - When applied to a method or field, will not expose the method/field
 	to Lua. This is useful if you would like to only expose methods of a type to
@@ -61,6 +59,14 @@ Rem:doc
 		{hidefields} - When applied to a type, not a field, this will hide all fields
 	without exception. As a result, no metatable is set on instances of objects
 	created with the type this is applied to.
+	
+		{binding="late"|"immediate"} - When applied to a type, this option specifies
+	what type of binding the type uses when pushing the object/retrieving methods.
+	
+		In the case of "late" binding, this will not add the methods to the object's
+	table until the method something tries to get the method from the object.  This
+	can remove some bottlenecks surrounding the pushing of objects, but may present
+	a minor speed hit when 
 End Rem
 
 Private
@@ -83,6 +89,15 @@ Const LREF_META_HIDEFIELDS$ = "hidefields"
 Const LREF_META_RENAME$ = "rename"
 Const LREF_META_NOCLASS$ = "noclass"
 Const LREF_META_STATIC$ = "static"
+Const LREF_META_BINDING$ = "binding"
+Const LREF_META_CONSTRUCTOR$ = "constructor"
+
+Const LREF_BINDING_DEFAULT%=-1
+Const LREF_BINDING_LATE%=0
+Const LREF_BINDING_IMMEDIATE%=1
+
+Const LREF_BINDING_MIN% = LREF_BINDING_DEFAULT-1
+Const LREF_BINDING_MAX% = LREF_BINDING_IMMEDIATE+1
 
 Public
 
@@ -148,20 +163,188 @@ Function LREF_AttachMetatable( state:Byte Ptr, idx:Int, metatable$ )
 End Function
 
 
+Function LREF_PushMethodClosure(state:Byte Ptr, _method:TMethod, objectIndex:Int, name$ )
+	lref_pushrawobject( state, _method )
+	lua_pushvalue( state, objectIndex )
+	lua_pushcclosure( state, LREF_TypeCall, 2 )
+End Function
+
+
+Private
+
+Rem
+The type cache stores information about all types as they relate to Lua
+EndRem
+
+Global LREF_TypeCache:TMap
+
+'#region Type info classes
+Type LREF_TypeInfo
+	Field name$					' name of type, default is typeid.Name()
+	Field constructor$			' name of constructor, default = New[name]
+	Field exposed%
+	Field static%
+	Field noclass%
+	Field hidefields%
+	Field binding%
+	Field methods:TMap
+	Field fields:TMap
+	Field typeid:TTypeId
+	
+	Method Init:LREF_TypeInfo(t:TTypeId)
+		name = t.Metadata(LREF_META_RENAME)
+		If Not name Then
+			name = t.Name()
+		EndIf
+		
+		typeid = t
+		
+		exposed = t.Metadata(LREF_META_EXPOSE).ToInt()
+		static = t.Metadata(LREF_META_STATIC).ToInt()
+		noclass = t.Metadata(LREF_META_NOCLASS).ToInt()
+		hidefields = t.Metadata(LREF_META_HIDEFIELDS).ToInt()
+		
+		constructor = t.Metadata(LREF_META_CONSTRUCTOR)
+		If Not constructor Then
+			constructor = "New"+name
+		EndIf
+		
+		Select t.Metadata(LREF_META_BINDING)
+			Case "late", "default", ""
+				binding = LREF_BINDING_LATE
+			Case "immediate"
+				binding = LREF_BINDING_IMMEDIATE
+			Default
+				Throw LREF_Exception(t.Name()+": Invalid binding '"+t.Metadata(LREF_META_BINDING)+"'", Null)
+		End Select
+		
+		methods = New TMap
+		fields = New TMap
+		
+		For Local meth:TMethod = EachIn t.Methods()
+			Local info:LREF_MethodInfo = New LREF_MethodInfo.Init(meth)
+			methods.Insert(info.name, info)
+		Next
+		
+		For Local tf:TField = EachIn t.Fields()
+			Local info:LREF_FieldInfo = New LREF_FieldInfo.Init(tf)
+			methods.Insert(info.name, info)
+		Next
+		
+		Return Self
+	End Method
+End Type
+
+Type LREF_MethodInfo
+	Field name$
+	Field hidden%
+	Field _method:TMethod
+	
+	Method Init:LREF_MethodInfo(m:TMethod)
+		name = m.Metadata(LREF_META_RENAME)
+		If Not name Then
+			name = m.Name()
+		EndIf
+		
+		Local tn$ = m.Name().ToLower()
+		If tn = "new" Or tn = "delete" Then
+			hidden = True
+		Else
+			hidden = m.Metadata(LREF_META_HIDDEN).ToInt()
+		EndIF
+		
+		_method = m
+		Return Self
+	End Method
+End Type
+
+Type LREF_FieldInfo
+	Field name$
+	Field hidden%
+	Field _field:TField
+	
+	Method Init:LREF_FieldInfo(f:TField)
+		name = f.Name()
+		hidden = f.Metadata(LREF_META_HIDDEN).ToInt()
+		_field = f
+		Return Self
+	End Method
+End Type
+'#endregion
+
+Function LREF_BuildTypeCache:TMap()
+	Local typecache:TMap = New TMap
+	Local info:LREF_TypeInfo
+	
+	For Local typeid:TTypeId = EachIn TTypeId.EnumTypes()
+		info = New LREF_TypeInfo.Init(typeid)
+		typecache.Insert(typeid, info)
+	Next
+	
+	Return typecache
+End Function
+
+Function LREF_FindMethod:TMethod(typeid:TTypeID, name$)
+	Local typecache:TMap
+	Local typeinfo:LREF_TypeInfo
+	Local methinfo:LREF_MethodInfo
+	
+	typecache = LREF_TypeCache
+	While typeid
+		typeinfo = LREF_TypeInfo(typecache.ValueForKey(typeid))
+		
+		If typeinfo.exposed Then
+			methinfo = LREF_MethodInfo(typeinfo.methods.ValueForKey(name))
+			If methinfo Then
+				If methinfo.hidden Then
+					Return Null
+				EndIf
+				Return methinfo._method
+			EndIf
+		EndIf
+		typeid = typeid.SuperType()
+	Wend
+	Return Null
+End Function
+
+Function LREF_FindField:TField(typeid:TTypeID, name$)
+	Local typecache:TMap
+	Local typeinfo:LREF_TypeInfo
+	Local fieldinfo:LREF_FieldInfo
+	
+	typecache = LREF_TypeCache
+	While typeid
+		typeinfo = LREF_TypeInfo(typecache.ValueForKey(typeid))
+		
+		If typeinfo.exposed And (Not typeinfo.hidefields) Then
+			fieldinfo = LREF_FieldInfo(typeinfo.fields.ValueForKey(name))
+			If fieldinfo Then
+				If fieldinfo.hidden Then
+					Return Null
+				EndIf
+				Return fieldinfo._field
+			EndIf
+		EndIf
+		typeid = typeid.SuperType()
+	Wend
+	Return Null
+End Function
+
+
 ' TypeNew([object])
 Function LREF_TypeNew:Int(state:Byte Ptr)
 	Const ERROR_NO_TYPEID$ = "Unable to construct object: no TTypeId attached to class constructor"
 	Const ERROR_OBJ_NULL$ = "Unable to construct object: object passed to constructor is Null"
 	Const ERROR_CANNOT_ALLOCATE_OBJ$ = "Unable to construct object: object could not be allocated"
 
-	Local typeid:TTypeId
+	Local typeinfo:LREF_TypeInfo
 	Local obj:Object
 	Local expose:Int, noclass:Int, static:Int, hidefields:Int
 	Local objIdx:Int = -1
 
-	typeid = TTypeId(lref_torawobject(state, LREF_lua_upvalueindex(1)))
+	typeinfo = LREF_TypeInfo(lref_torawobject(state, LREF_lua_upvalueindex(1)))
 
-	If typeid = Null Then
+	If typeinfo = Null Then
 		If LREF_USE_EXCEPTIONS Then
 			Throw LREF_Exception( ERROR_NO_TYPEID, state )
 		EndIf
@@ -186,7 +369,7 @@ Function LREF_TypeNew:Int(state:Byte Ptr)
 				Return 0
 			EndIf
 		Else
-			obj = typeid.NewObject()
+			obj = typeinfo.typeid.NewObject()
 		EndIf
 
 		If obj = Null Then
@@ -199,12 +382,7 @@ Function LREF_TypeNew:Int(state:Byte Ptr)
 
 			Return 0
 		Else
-			expose = lua_toboolean( state, LREF_lua_upvalueindex(2) )
-			static = lua_toboolean( state, LREF_lua_upvalueindex(3) )
-			noclass = lua_toboolean( state, LREF_lua_upvalueindex(4) )
-			hidefields = lua_toboolean( state, LREF_lua_upvalueindex(5) )
-
-			LREF_PushBMaxObject( state, obj, typeid, expose, static, noclass, hidefields, objIdx )
+			LREF_PushBMaxObject( state, obj, typeinfo.typeid, typeinfo.exposed, typeinfo.static, typeinfo.noclass, typeinfo.hidefields, typeinfo.binding, objIdx )
 
 			Return 1
 		EndIf
@@ -229,31 +407,16 @@ Function LREF_TypeFieldSet:Int(state:Byte Ptr)
 	name = lua_tostring( state, 2 )
 	obj = LREF_GetValue( state, 1 )
 
-	If obj Then
-		typeid = TTypeId.ForObject(obj)
-		If typeid Then
-			rfield = typeid.FindField(name)
+	If obj Then typeid = TTypeId.ForObject(obj)
+	
+	If typeid Then
+		rfield = LREF_FindField(typeid, name)
+	
+		If rfield <> Null Then
+			rfield.Set( obj, LREF_GetValue( state, 3 ) )					' Is a type field
+		Else
+			lua_rawset( state, 1 )										  ' Not a type field
 		EndIf
-	EndIf
-	
-	If rfield <> Null Then
-		hidden = rfield.MetaData(LREF_META_HIDDEN).ToInt()
-	
-		' Ensure that the field is not hidden in a supertype
-		superid = typeid.SuperType()
-		While superid <> Null
-			If ( superid.MetaData(LREF_META_EXPOSE).ToInt()=0 Or superid.MetaData(LREF_META_HIDEFIELDS).ToInt() ) And superid.FindField(name) <> Null Then
-				hidden = True
-				Exit
-			EndIf
-			superid = superid.SuperType()
-		Wend
-	EndIf
-	
-	If rfield <> Null And (Not hidden) Then
-		rfield.Set( obj, LREF_GetValue( state, 3 ) )					' Is a type field
-	Else
-		lua_rawset( state, 1 )										  ' Not a type field
 	EndIf
 
 	Return 0
@@ -262,76 +425,84 @@ End Function
 
 ' TypeFieldGet( table, key ) [someVar = obj.field]
 Function LREF_TypeFieldGet:Int(state:Byte Ptr)
+	If lua_type( state, 2 ) <> LUA_TSTRING Then
+		lua_rawget( state, 1 )  ' Not a string (name), so not a field
+		Return 1
+	EndIf
+	
 	Local obj:Object
 	Local typeid:TTypeId = Null
 	Local superid:TTypeId = Null
 	Local hidden:Int = 0
 	Local rfield:TField = Null
 	Local name:String
+	
+	name = lua_tostring( state, 2 )
+	lua_pushvalue( state, 2 )
+	lua_rawget( state, 1 )
+	
+	If lua_type( state, -1 ) <> LUA_TNIL Then
+		Return 1
+	EndIf
+	
+	lua_pushstring( state, LREF_OBJECT_FIELD )
+	lua_rawget( state, 1 )
+	obj = lref_torawobject( state, -1 )
+	
+	If obj Then
+		typeid = TTypeId.ForObject(obj)
+	EndIf
+	
+	If typeid Then
+		rfield = LREF_FindField(typeid, name)
+	
+		If rfield <> Null Then
+				Select rfield.TypeId()
+				Case FloatTypeId
+					lua_pushnumber( state, rfield.GetFloat(obj) )
 
-	If lua_type( state, 2 ) <> LUA_TSTRING Then
-		lua_rawget( state, 1 )  ' Not a string (name), so not a field
+				Case DoubleTypeId
+					lua_pushnumber( state, rfield.GetDouble(obj) )
+
+				Case ByteTypeId, ShortTypeId, IntTypeId
+					lua_pushnumber( state, rfield.GetInt(obj) )
+
+				Case LongTypeId
+					lua_pushnumber( state, rfield.GetLong(obj) )
+
+				Case StringTypeId
+					lua_pushstring( state, rfield.GetString(obj) )
+
+				Case ArrayTypeId
+					lua_pushbmaxarray( state, rfield.Get(obj), False )
+
+				Default
+					Local fval:Object = rfield.Get(obj)
+					If fval = Null Then
+						lua_pushnil(state)
+					Else
+						LREF_ConstructBMaxObject( state, fval, Null )
+					EndIf
+			End Select
+			
+			Return 1
+		EndIf
+		
+		' check for cached method
+		lua_pushvalue(state, 2)
+		lua_rawget(state, 1)
+		If lua_type(state, -1) = LUA_TFUNCTION Then
+			Return 1
+		EndIf
+		lua_pop(state, 1)
+		
+		Local rmeth:TMethod = LREF_FindMethod(typeid, name)
+		LREF_PushMethodClosure(state, rmeth, 4, name)
+		
 		Return 1
 	EndIf
 
-	name = lua_tostring( state, 2 )
-	lua_pushstring( state, LREF_OBJECT_FIELD )
-	lua_gettable( state, 1 )
-	obj = lref_torawobject( state, -1 )
 	lua_pop(state, 1)
-
-	If obj Then
-		typeid = TTypeId.ForObject(obj)
-
-		If typeid Then
-			rfield = typeid.FindField(name)
-		EndIf
-	EndIf
-	
-	If rfield <> Null Then
-		hidden = rfield.MetaData(LREF_META_HIDDEN).ToInt()
-		
-		superid = typeid.SuperType()
-		While superid <> Null And superid <> ObjectTypeId And hidden < 1
-			If ( superid.MetaData(LREF_META_EXPOSE).ToInt()=0 Or superid.MetaData(LREF_META_HIDEFIELDS).ToInt()>0 ) And superid.FindField(name) <> Null Then
-				hidden = True
-				Exit
-			EndIf
-			superid = superid.SuperType()
-		Wend
-	EndIf
-
-	If rfield <> Null And (Not hidden) Then
-		Select rfield.TypeId()
-			Case FloatTypeId
-				lua_pushnumber( state, rfield.GetFloat(obj) )
-
-			Case DoubleTypeId
-				lua_pushnumber( state, rfield.GetDouble(obj) )
-
-			Case ByteTypeId, ShortTypeId, IntTypeId
-				lua_pushnumber( state, rfield.GetInt(obj) )
-
-			Case LongTypeId
-				lua_pushnumber( state, rfield.GetLong(obj) )
-
-			Case StringTypeId
-				lua_pushstring( state, rfield.GetString(obj) )
-
-			Case ArrayTypeId
-				lua_pushbmaxarray( state, rfield.Get(obj), False )
-
-			Default
-				Local fval:Object = rfield.Get(obj)
-				If fval = Null Then
-					lua_pushnil(state)
-				Else
-					LREF_ConstructBMaxObject( state, fval, Null )
-				EndIf
-		End Select
-	Else
-		lua_rawget( state, 1 )
-	EndIf
 
 	Return 1
 End Function
@@ -427,8 +598,10 @@ Function LREF_ConstructBMaxObject( state:Byte Ptr, obj:Object, typeId:TTypeId )
 	If typeId = Null Then
 		typeId = TTypeId.ForObject(obj)
 	EndIf
+	
+	Local info:LREF_TypeInfo = LREF_TypeInfo(LREF_TypeCache.ValueForKey(typeId))
 
-	lua_pushstring( state, "New"+typeId.Name() )
+	lua_pushstring( state, info.constructor )
 	lua_gettable( state, LUA_GLOBALSINDEX )
 
 	If lua_type( state, -1 ) = LUA_TFUNCTION Then
@@ -458,7 +631,7 @@ Function LREF_ConstructBMaxObject( state:Byte Ptr, obj:Object, typeId:TTypeId )
 		Else
 			' If no constructor for the class exists, push it as just an object without methods
 			lua_pop( state, 1 )
-			LREF_PushBMaxObject( state, obj, Null, False, False, False, True, -1 )
+			LREF_PushBMaxObject( state, obj, Null, False, False, False, True, LREF_BINDING_LATE, -1 )
 		EndIf
 	EndIf
 End Function
@@ -536,16 +709,12 @@ End Function
 ' NOTE: consider rewriting this such that the method table is an upvalue to the
 ' New*() function that is then copied and modified for the object.  (May pose
 ' issues for method-pointer style functions.)
-Function LREF_PushBMaxObject( state:Byte Ptr, obj:Object, from:TTypeId, expose:Int=-1, static:Int=-1, noclass:Int=-1, hidefields:Int=-1, objidx:Int=-1 )
+Function LREF_PushBMaxObject( state:Byte Ptr, obj:Object, from:TTypeId, expose:Int=-1, static:Int=-1, noclass:Int=-1, hidefields:Int=-1, binding%=LREF_BINDING_DEFAULT, objidx:Int=-1 )
 	Local methIter:TMethod
 	Local tableIdx:Int
 	Local rename:String = Null
 	Local name:String = Null
 	Local ownObjIdx:Int = False
-	
-	If from = Null Then
-		from = TTypeId.ForObject(obj)
-	EndIf
 	
 	If expose = -1 Then
 		expose = from.MetaData(LREF_META_EXPOSE).ToInt()
@@ -585,8 +754,20 @@ Function LREF_PushBMaxObject( state:Byte Ptr, obj:Object, from:TTypeId, expose:I
 		
 		lua_settable(state, tableIdx)
 	EndIf
-
-	If from <> Null And expose Then
+	
+	If binding = LREF_BINDING_DEFAULT Then
+		Select from.Metadata(LREF_META_BINDING)
+			Case "late"
+				binding = LREF_BINDING_LATE
+			Case "immediate"
+				binding = LREF_BINDING_IMMEDIATE
+			Default
+				binding = LREF_BINDING_LATE
+		End Select
+	EndIf
+	
+	' This is a hold-over from prior versions where binding of methods was immediate.
+	If expose And (binding = LREF_BINDING_IMMEDIATE Or (static And noclass)) Then
 		' This is not something I'm particularly fond of, and I would like to
 		' see if I can do this better.  Currently, the methods are iterated
 		' over and pushed onto the stack each time you push an object.  This
@@ -756,6 +937,10 @@ End Function
 
 Public
 
+Function LREF_Init()
+	LREF_TypeCache = LREF_BuildTypeCache()
+End Function
+
 Rem:doc
 	Low-level function to expose/implement a type in Lua.
 	
@@ -772,23 +957,60 @@ at -1, this value will be retrieved from the Type's LREF_META_NOCLASS attribute.
 this is set to true (or the Type has its LREF_META_HIDEFIELDS attribute set to a
 non-zero value), the Type's fields will be inaccessible in Lua. Left at -1, this
 value will be retrieved from the Type's LREF_META_HIDEFIELDS attribute.
-
+	@param binding The type of binding to use.  See LREF_BINDING_* constants.
+	@param name The name of the type to use.  Defaults to the name specified
+	by the type or its alias.
+	@param constructor The name of the constructor.  Defaults to "New[name]"
+	
+	@note Changing the attribute values from their default will replace the old
+	cached values.
 EndRem
-Function lua_implementtype( state:Byte Ptr, from:TTypeId, expose:Int=-1, static:Int=-1, noclass:Int=-1, hidefields%=-1 )
+Function lua_implementtype( state:Byte Ptr, from:TTypeId, expose:Int=-1, static:Int=-1, noclass:Int=-1, hidefields%=-1, binding%=LREF_BINDING_DEFAULT, name$="", constructor$="" )
+	Local info:LREF_TypeInfo = LREF_TypeInfo(LREF_TypeCache.ValueForKey(from))
+	
 	If expose = -1 Then
-		expose = from.MetaData(LREF_META_EXPOSE).ToInt()
+		expose = info.exposed
+	Else
+		info.exposed = expose
 	EndIf
 
 	If static = -1 Then
-		static = from.MetaData(LREF_META_STATIC).ToInt()
+		static = info.static
+	Else
+		info.static = static
 	EndIf
 
 	If noclass = -1 Then
-		noclass = from.MetaData(LREF_META_NOCLASS).ToInt()
+		noclass = info.noclass
+	Else
+		info.noclass = noclass
 	EndIf
 
 	If hidefields = -1 Then
-		hidefields = from.MetaData(LREF_META_HIDEFIELDS).ToInt()
+		hidefields = info.hidefields
+	Else
+		info.hidefields = hidefields
+	EndIf
+	
+	If binding = LREF_BINDING_DEFAULT Then
+		binding = info.binding
+	Else
+		If binding < LREF_BINDING_MIN Or LREF_BINDING_MAX < binding Then
+			Throw LREF_Exception("Invalid binding code "+binding+" for type "+from.Name(), state)
+		EndIf
+		info.binding = binding
+	EndIf
+	
+	If Not name Then
+		name = info.name
+	Else
+		info.name = name
+	EndIf
+	
+	If Not constructor Then
+		constructor = info.constructor
+	Else
+		info.constructor = constructor
 	EndIf
 
 	If expose Then
@@ -796,15 +1018,15 @@ Function lua_implementtype( state:Byte Ptr, from:TTypeId, expose:Int=-1, static:
 			If noclass Then
 				LREF_PushBMaxObject( state, from.NewObject(), from )
 			Else
-				lua_pushstring( state, from.Name() )
+				lua_pushstring( state, name )
 				LREF_PushBMaxObject( state, from.NewObject(), from, expose, static, noclass )
 				lua_settable( state, LUA_GLOBALSINDEX )
 			EndIf
 		Else
 			' function NewName()
-			lua_pushstring( state, "New"+from.Name() )
+			lua_pushstring( state, info.constructor )
 			' upvalues - a lot of them
-			lref_pushrawobject( state, from )	  ' uv 1
+			lref_pushrawobject( state, info )	  ' uv 1
 			lua_pushboolean( state, expose )
 			lua_pushboolean( state, static )
 			lua_pushboolean( state, noclass )
@@ -847,7 +1069,7 @@ Function lua_pushbmaxobject( state:Byte Ptr, obj:Object, excludeMethods:Int=Fals
 	If excludeMethods = False Then
 		LREF_ConstructBMaxObject( state, obj, Null )
 	Else
-		LREF_PushBMaxObject( state, obj, Null, False, False, False, True )
+		LREF_PushBMaxObject( state, obj, Null, False, False, False, True, LREF_BINDING_LATE )
 	EndIf
 End Function
 
