@@ -64,7 +64,6 @@ int lref_disposeobject(lua_State* state) {
     }
     
     lref_releaserawobject(state, -1);
-    printf("Releasing object\n");
     
     return 0;
 }
