@@ -228,7 +228,7 @@ Type LREF_TypeInfo
 		
 		For Local tf:TField = EachIn t.Fields()
 			Local info:LREF_FieldInfo = New LREF_FieldInfo.Init(tf)
-			methods.Insert(info.name, info)
+			fields.Insert(info.name, info)
 		Next
 		
 		Return Self
